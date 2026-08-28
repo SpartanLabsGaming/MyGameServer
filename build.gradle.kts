@@ -6,18 +6,15 @@ plugins {
     id("com.vanniktech.maven.publish") version "0.36.0"
 }
 
-group = "com.example"
-version = "1.0.0"
+group = "io.github.spartanlaboratories"
+version = "1.0.0" as String
 
 repositories {
     mavenCentral()
 }
 
 dependencies {
-    // Only version 1.0.4 was directly confirmed on Maven Central at the
-    // time this file was written. Verify 1.0.5 is actually published
-    // before relying on it - if not, drop back to 1.0.4.
-    implementation("io.github.spartanlaboratories:GameTools:1.0.5")
+    implementation("io.github.spartanlaboratories:GameTools:1.1.0")
 
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
 
@@ -28,9 +25,6 @@ application {
     mainClass.set("MainKt")
 }
 
-kotlin {
-    jvmToolchain(23)
-}
 
 mavenPublishing {
     publishToMavenCentral()

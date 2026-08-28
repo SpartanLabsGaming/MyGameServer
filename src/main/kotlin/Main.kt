@@ -1,15 +1,15 @@
+import com.spartanlabs.gaming.gameobjects.Actor
+import com.spartanlabs.gaming.networking.GameServer
 import com.spartanlabs.geometry.Dimensions
 import com.spartanlabs.geometry.Point
-import java.net.InetAddress
-
-// TODO: same as Server.kt - point this at the real package for
-// Actor once confirmed (e.g. com.spartanlabs.actors.Actor).
 
 /**
  * Minimal concrete Actor. Actor -> VisibleObject is abstract (VisibleObject
- * declares `abstract fun draw()`), so a concrete subclass is required just
- * to instantiate one. This process is headless (no rendering), so draw()
- * is a no-op.
+ * declares `abstract fun draw()`), and GameObject (the root) declares
+ * `abstract fun onUpdate()`, so a concrete subclass is required just to
+ * instantiate one. This process is headless (no rendering), so draw() is a
+ * no-op, and no extra per-tick logic is needed beyond what Actor.tick()
+ * already does (onUpdate() -> draw() -> move()).
  */
 class SimpleActor(location: Point, dimensions: Dimensions) : Actor(location, dimensions) {
     override fun draw() {
@@ -25,26 +25,31 @@ class SimpleActor(location: Point, dimensions: Dimensions) : Actor(location, dim
 /**
  * Parses a raw client message (whitespace-separated, case-insensitive
  * command) and dispatches on the first token:
- *   PING                          -> replies "PONG"
+ *   PING                          -> replies "PONG" to just that player
  *   SET_DEST <index> <x> <y>      -> sets actors[index].destination
  *   SET_SPEED <index> <speed>     -> sets actors[index].baseSpeed
  *   STOP <index>                  -> sets destination to current location
  *
- * Note: this mutates Actor state from the Server's listener thread while
+ * GameServer's onPlayerMessage callback provides the sending player's name,
+ * so - unlike a plain broadcast-only server - PING can reply to just that
+ * one player via [GameServer.push].
+ *
+ * Note: this mutates Actor state from GameServer's listener thread(s) while
  * the main loop ticks/reads that same state - fine for a simple demo, but
  * not hardened against concurrent access.
  */
 private fun handleClientMessage(
+    playerName: String,
     message: String,
     actors: List<Actor>,
-    server: Server,
-    senderAddress: InetAddress
+    server: GameServer
 ) {
     val parts = message.split(" ".toRegex()).filter { it.isNotBlank() }
     val command = parts.getOrNull(0)?.uppercase() ?: return
 
     when (command) {
-        "PING" -> server.respond("PONG", senderAddress)
+        "PING" -> server.push(playerName, "PONG")
+            .onFailure { cause -> println("Could not reply to '$playerName': ${cause.message}") }
 
         "SET_DEST" -> {
             val index = parts.getOrNull(1)?.toIntOrNull()
@@ -66,17 +71,15 @@ private fun handleClientMessage(
         "STOP" -> {
             val index = parts.getOrNull(1)?.toIntOrNull()
             if (index != null && index in actors.indices) {
-                actors[index].destination = Point(actors[index].area.location)
+                actors[index].destination = Point(actors[index].location)
             }
         }
 
-        else -> println("Unknown command: $message")
+        else -> println("Unknown command from '$playerName': $message")
     }
 }
 
 fun main() {
-    val server = Server(sendPort = 9999, listenPort = 9998)
-
     val actors = listOf(
         SimpleActor(Point(x = 0.0, y = 0.0), Dimensions(width = 25.0, height = 25.0)).apply {
             destination = Point(x = 200.0, y = 0.0)
@@ -94,17 +97,28 @@ fun main() {
         }
     )
 
+    // GameServer's onPlayerMessage callback is a constructor parameter with
+    // no public setter, but the handler needs a reference to the server
+    // itself (to reply via push()). serverRef sidesteps the chicken-and-egg
+    // problem: the lambda only reads it once a message actually arrives,
+    // by which point the assignment below has long since happened.
+    var serverRef: GameServer? = null
+    val server = GameServer(maxConnections = 4) { playerName, message ->
+        serverRef?.let { handleClientMessage(playerName, message, actors, it) }
+    }
+    serverRef = server
+
     val tickIntervalNanos = 1_000_000_000L / 60L // 60 times per second
     var nextTick = System.nanoTime()
 
-    server.startListening { message, senderAddress ->
-        handleClientMessage(message, actors, server, senderAddress)
-    }
-
-    server.use {
+    try {
         while (true) {
             actors.forEach { it.tick() } // advances each actor toward its destination
-            server.pushActors(actors)
+
+            // Sends the whole actor list as a single "STATE <json>" datagram
+            // to every connected player.
+            server.broadcast(actors)
+                .onFailure { cause -> println("Failed to broadcast actor state: ${cause.message}") }
 
             nextTick += tickIntervalNanos
             val sleepNanos = nextTick - System.nanoTime()
@@ -115,5 +129,8 @@ fun main() {
                 nextTick = System.nanoTime()
             }
         }
+    } finally {
+        server.shutDown()
+            .onFailure { cause -> println("Failed to shut down cleanly: ${cause.message}") }
     }
 }
