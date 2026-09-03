@@ -65,15 +65,15 @@ internal fun disconnectPlayer(player: Player, world: World) {
  * Parses a raw client message (whitespace-separated, case-insensitive
  * command) and dispatches on the first token:
  *   PING                          -> replies "PONG" to just that player
- *   SET_DEST <index> <x> <y>      -> sets broadcastObjects[index] destination
- *   SET_SPEED <index> <speed>     -> sets actors[index].baseSpeed
+ *   SET_DEST <index> <x> <y>      -> sets the destination of the index-th broadcast object
+ *   SET_SPEED <index> <speed>     -> sets actors[index].speed
  *   STOP <index>                  -> sets destination to current location
  *
- * SET_DEST's index is a position in [World.broadcastObjects] - the same list, in the same
- * order, that the client picked against in the last `STATE` it received (NOT
- * [World.gameObjects], whose indices drift whenever an object is individually hidden). The
- * move is applied only when that slot holds an [Alive], that [Alive] has an [Alive.owner],
- * and that owner is the [Player] the sending client is associated with - else it is ignored.
+ * SET_DEST's index is a position in the broadcast list - the [VisibleObject]s among
+ * [World.gameObjects], in insertion order - which is the same list, in the same order, that
+ * the client picked against in the last `STATE` it received. The move is applied only when
+ * that slot holds an [Alive], that [Alive] has an [Alive.owner], and that owner is the
+ * [Player] the sending client is associated with - else it is ignored.
  *
  * GameServer's onPlayerMessage callback provides the sending player's name,
  * so - unlike a plain broadcast-only server - PING can reply to just that
@@ -103,10 +103,12 @@ private fun handleClientMessage(
             val x = parts.getOrNull(2)?.toDoubleOrNull()
             val y = parts.getOrNull(3)?.toDoubleOrNull()
             if (index != null && x != null && y != null) {
-                // index is a position in the broadcast list the client picked against. Honour
-                // the move only when that slot holds an Alive, the Alive has an owner, and the
-                // owner is the sender's player.
-                val target = world.broadcastObjects.getOrNull(index)
+                // index is a position in the broadcast list the client picked against - the
+                // VisibleObjects among world.gameObjects, in insertion order (the same list,
+                // same order, as the STATE broadcast below). Honour the move only when that
+                // slot holds an Alive, the Alive has an owner, and the owner is the sender's
+                // player.
+                val target = world.gameObjects.filterIsInstance<VisibleObject>().getOrNull(index)
                 if (target is Alive) {
                     val owner = target.owner
                     if (owner != null && owner === players[playerName]) {
@@ -242,9 +244,10 @@ fun main() {
 
             world.tick() // rebuilds the quadtree, then advances every object one step
 
-            // Sends every visible object as a single "STATE <json>" datagram to every player.
-            // This is the exact list (same order) that SET_DEST indices resolve against.
-            server.broadcast(world.broadcastObjects)
+            // Sends every VisibleObject in the world as a single "STATE <json>" datagram to
+            // every player. This is the exact list (same order) that SET_DEST indices resolve
+            // against.
+            server.broadcast(world.gameObjects.filterIsInstance<VisibleObject>())
                 .onFailure { cause -> println("Failed to broadcast actor state: ${cause.message}") }
 
             nextTick += tickIntervalNanos
