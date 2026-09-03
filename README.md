@@ -37,8 +37,9 @@ Ownership is enforced on every command: a client can only move or attack with an
 
 ### The demo world
 
-- a large tiled floor, drawn behind everything;
-- three wandering "zombie" `Alive`s that belong to no one;
+- a large tiled floor and, butted against its right edge, a graveyard backdrop, both drawn
+  behind everything;
+- ten wandering "zombie" `Alive`s that belong to no one, scattered across the graveyard;
 - one "nature's prophet" `Alive` per connected player, spawned at a random anchor.
 
 ## Protocol

@@ -216,33 +216,44 @@ private fun handleClientInput(
     }
 }
 
+/** How many unowned "zombie" [Alive]s the demo spawns in the graveyard. */
+private const val ZOMBIE_COUNT = 10
+
 fun main() {
-    val actors = listOf(
-        // turns = false: these actors are drawn upright, so their facing angle is not
-        // meaningful to a renderer even though they still track one internally.
-        Alive(Point(x = 0.0, y = 0.0), Dimensions(width = 120.0, height = 120.0), 100.0).apply {
-            destination = Point(x = 200.0, y = 0.0)
-            texture = "minecraftzombie.png"
-            turns = false
-        },
-        Alive(Point(x = 50.0, y = 50.0), Dimensions(width = 120.0, height = 120.0), 100.0).apply {
-            destination = Point(x = 50.0, y = 300.0)
-            speed = ModularStat(base = 15.0)
-            texture = "minecraftzombie.png"
-            turns = false
-        },
-        Alive(Point(x = -100.0, y = 100.0), Dimensions(width = 120.0, height = 120.0), 100.0).apply {
-            destination = Point(x = 100.0, y = -100.0)
-            speed = ModularStat(base = 5.0)
+    // Two decorative backdrops with no behaviour of their own, added to the world first so
+    // clients draw them behind everything else. The floor is 6000x6000 centred on the origin
+    // (right edge at x = 3000); the graveyard is butted against that edge.
+    val floor = VisibleObject(width = 6_000.0, height = 6_000.0, x = 0.0, y = 0.0).apply {
+        texture = "whitetilefloor.jpg"
+    }
+    val graveyard = VisibleObject(width = 3_000.0, height = 6_000.0, x = 4_500.0, y = 0.0).apply {
+        texture = "graveyard.jpg"
+    }
+
+    // A random point inside the graveyard, kept clear of its edges so a spawned actor is
+    // visibly on the texture.
+    val graveyardInset = 250.0
+    fun randomGraveyardPoint() = Point(
+        x = Random.nextDouble(
+            graveyard.location.x - graveyard.dimensions.width / 2 + graveyardInset,
+            graveyard.location.x + graveyard.dimensions.width / 2 - graveyardInset,
+        ),
+        y = Random.nextDouble(
+            graveyard.location.y - graveyard.dimensions.height / 2 + graveyardInset,
+            graveyard.location.y + graveyard.dimensions.height / 2 - graveyardInset,
+        ),
+    )
+
+    // ZOMBIE_COUNT unowned "zombie" Alives scattered across the graveyard, each ambling to a
+    // random spot within it at a random pace. turns = false: they are drawn upright, so their
+    // facing angle is not meaningful to a renderer even though they still track one internally.
+    val actors = List(ZOMBIE_COUNT) {
+        Alive(randomGraveyardPoint(), Dimensions(width = 120.0, height = 120.0), 100.0).apply {
+            destination = randomGraveyardPoint()
+            speed = ModularStat(base = Random.nextDouble(5.0, 20.0))
             texture = "minecraftzombie.png"
             turns = false
         }
-    )
-
-    // A large tiled floor for the actors to stand on. It has no behaviour of its own; it is
-    // added to the world first so clients draw it behind everything else.
-    val floor = VisibleObject(width = 6_000.0, height = 6_000.0, x = 0.0, y = 0.0).apply {
-        texture = "whitetilefloor.jpg"
     }
 
     // GameTools' World: owns the game objects and a quadtree it rebuilds from their positions
@@ -251,6 +262,7 @@ fun main() {
     // same call to be ticked, indexed, and broadcast.
     val world = World().apply {
         add(floor)
+        add(graveyard)
         actors.forEach { add(it) }
     }
 
