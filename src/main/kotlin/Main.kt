@@ -68,12 +68,15 @@ internal fun disconnectPlayer(player: Player, world: World) {
  *   SET_DEST <index> <x> <y>      -> sets the destination of the index-th broadcast object
  *   SET_SPEED <index> <speed>     -> sets actors[index].speed
  *   STOP <index>                  -> sets destination to current location
+ *   ATTACK <attacker> <target>    -> orders the attacker Alive to attack the target Alive
  *
- * SET_DEST's index is a position in the broadcast list - the [VisibleObject]s among
- * [World.gameObjects], in insertion order - which is the same list, in the same order, that
- * the client picked against in the last `STATE` it received. The move is applied only when
- * that slot holds an [Alive], that [Alive] has an [Alive.owner], and that owner is the
- * [Player] the sending client is associated with - else it is ignored.
+ * SET_DEST's and ATTACK's indices are positions in the broadcast list - the [VisibleObject]s
+ * among [World.gameObjects], in insertion order - which is the same list, in the same order,
+ * that the client picked against in the last `STATE` it received. SET_DEST is applied only
+ * when that slot holds an [Alive], that [Alive] has an [Alive.owner], and that owner is the
+ * [Player] the sending client is associated with - else it is ignored. ATTACK additionally
+ * requires the target slot to hold a different [Alive] that is not one of the sending
+ * player's own units (see [issuePlayerAttack]).
  *
  * GameServer's onPlayerMessage callback provides the sending player's name,
  * so - unlike a plain broadcast-only server - PING can reply to just that
@@ -133,8 +136,53 @@ private fun handleClientMessage(
             }
         }
 
+        "ATTACK" -> {
+            val attackerIndex = parts.getOrNull(1)?.toIntOrNull()
+            val targetIndex = parts.getOrNull(2)?.toIntOrNull()
+            if (attackerIndex != null && targetIndex != null) {
+                issuePlayerAttack(playerName, attackerIndex, targetIndex, world, players)
+            }
+        }
+
         else -> println("Unknown command from '$playerName': $message")
     }
+}
+
+/**
+ * Orders [playerName]'s [Alive] at broadcast-list slot [attackerIndex] to attack the [Alive]
+ * at slot [targetIndex], when the order is legal.
+ *
+ * Both indices are positions in the broadcast list - the [VisibleObject]s among
+ * [World.gameObjects] in insertion order - the same list, in the same order, the client
+ * picked against in the last `STATE`. The attack is issued only when every check passes:
+ * both slots hold an [Alive], they are not the same actor, the attacker's [Alive.owner] is
+ * the sending [Player], and the target is not one of that same player's own units. Any
+ * failure is silently ignored, mirroring how [handleClientMessage] drops an unauthorised
+ * `SET_DEST`.
+ *
+ * Runs on GameServer's listener thread(s) and calls [Alive.issueAttack], mutating combat
+ * state the main loop reads concurrently - the same "fine for a demo, not hardened" caveat
+ * as the rest of [handleClientMessage].
+ *
+ * @return `true` when an attack was issued, `false` when the order was rejected
+ */
+internal fun issuePlayerAttack(
+    playerName: String,
+    attackerIndex: Int,
+    targetIndex: Int,
+    world: World,
+    players: Map<String, Player>
+): Boolean {
+    val visibles = world.gameObjects.filterIsInstance<VisibleObject>()
+    val attacker = visibles.getOrNull(attackerIndex) as? Alive ?: return false
+    val target = visibles.getOrNull(targetIndex) as? Alive ?: return false
+    if (attacker === target) return false
+
+    val player = players[playerName]
+    if (player == null || attacker.owner !== player || target.owner === player) return false
+
+    attacker.issueAttack(target)
+    return true
 }
 
 /**
