@@ -1,5 +1,6 @@
 import com.spartanlabs.gaming.gameobjects.Actor
 import com.spartanlabs.gaming.gameobjects.Alive
+import com.spartanlabs.gaming.gameobjects.ModularStat
 import com.spartanlabs.gaming.gameobjects.Player
 import com.spartanlabs.gaming.gameobjects.VisibleObject
 import com.spartanlabs.gaming.gameobjects.World
@@ -37,7 +38,10 @@ internal fun connectPlayer(name: String, world: World): Player {
         val alive = Alive(Point(x = startX, y = anchorY), Dimensions(width = 155.0, height = 155.0), 400.0).apply {
             texture = "natures prophet.png"
             turns = false
-            baseSpeed = 30.0
+            // Actor.speed is a ModularStat since GameTools 1.8.0 (baseSpeed is gone). Setting
+            // ModularStat.base alone doesn't recompute the effective value, so replace the
+            // whole stat - there are no speed mods in this demo to preserve.
+            speed = ModularStat(base = 30.0)
             destination = Point(x = startX, y = anchorY + 120.0)
         }
         player.own(alive) // sets alive.owner and adds to the roster (kept in step since 1.5.2)
@@ -116,7 +120,7 @@ private fun handleClientMessage(
             val index = parts.getOrNull(1)?.toIntOrNull()
             val speed = parts.getOrNull(2)?.toDoubleOrNull()
             if (index != null && speed != null && index in actors.indices) {
-                actors[index].baseSpeed = speed
+                actors[index].speed = ModularStat(base = speed)
             }
         }
 
@@ -173,13 +177,13 @@ fun main() {
         },
         Alive(Point(x = 50.0, y = 50.0), Dimensions(width = 120.0, height = 120.0), 100.0).apply {
             destination = Point(x = 50.0, y = 300.0)
-            baseSpeed = 15.0
+            speed = ModularStat(base = 15.0)
             texture = "minecraftzombie.png"
             turns = false
         },
         Alive(Point(x = -100.0, y = 100.0), Dimensions(width = 120.0, height = 120.0), 100.0).apply {
             destination = Point(x = 100.0, y = -100.0)
-            baseSpeed = 5.0
+            speed = ModularStat(base = 5.0)
             texture = "minecraftzombie.png"
             turns = false
         }
