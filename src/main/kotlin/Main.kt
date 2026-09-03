@@ -251,7 +251,7 @@ fun main() {
         Alive(randomGraveyardPoint(), Dimensions(width = 120.0, height = 120.0), 100.0).apply {
             destination = randomGraveyardPoint()
             speed = ModularStat(base = Random.nextDouble(5.0, 20.0))
-            texture = "minecraftzombie.png"
+            texture = "zombie.png"
             turns = false
         }
     }
