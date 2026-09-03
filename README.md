@@ -80,7 +80,7 @@ received &mdash; the same list, in the same order, that the server resolves agai
 Command handlers run on listener threads and mutate `Actor` / `Alive` state that the loop
 thread reads and writes concurrently, without synchronization. Fine for a local demo; not
 safe under real load. Tracked in
-[issue #1](https://github.com/SpartanLaboratories/MyGameServer/issues/1).
+[issue #1](https://github.com/SpartanLabsGaming/MyGameServer/issues/1).
 
 ## Building and running
 

@@ -35,7 +35,7 @@ mavenPublishing {
         name.set("My Game Server")
         description.set("A prototype for a game server.")
         inceptionYear.set("2026")
-        url.set("https://github.com/SpartanLaboratories/MyGameServer")
+        url.set("https://github.com/SpartanLabsGaming/MyGameServer")
         licenses {
             license {
                 name.set("The Apache License, Version 2.0")
@@ -51,9 +51,9 @@ mavenPublishing {
             }
         }
         scm {
-            url.set("https://github.com/SpartanLaboratories/MyGameServer/")
-            connection.set("scm:git:git://github.com/SpartanLaboratories/MyGameTools.git")
-            developerConnection.set("scm:git:ssh://git@github.com/SpartanLaboratories/MyGameTools.git")
+            url.set("https://github.com/SpartanLabsGaming/MyGameServer/")
+            connection.set("scm:git:git://github.com/SpartanLabsGaming/MyGameServer.git")
+            developerConnection.set("scm:git:ssh://git@github.com/SpartanLabsGaming/MyGameServer.git")
         }
     }
 }
