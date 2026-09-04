@@ -10,7 +10,7 @@ import com.spartanlabs.gaming.networking.MouseActionType
 import com.spartanlabs.generaltools.Color
 import com.spartanlabs.geometry.Dimensions
 import com.spartanlabs.geometry.Point
-import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ConcurrentLinkedQueue
 import kotlin.math.roundToInt
 import kotlin.random.Random
 
@@ -82,9 +82,9 @@ internal fun disconnectPlayer(player: Player, world: World) {
  * so - unlike a plain broadcast-only server - PING can reply to just that
  * one player via [GameServer.push].
  *
- * Note: this mutates Actor state from GameServer's listener thread(s) while
- * the main loop ticks/reads that same state - fine for a simple demo, but
- * not hardened against concurrent access.
+ * Called only from [drainPendingCommands] on the main loop thread - never directly from a
+ * GameServer listener thread - so mutating Actor/World state here needs no synchronisation
+ * with [main]'s `world.tick()`.
  */
 private fun handleClientMessage(
     playerName: String,
@@ -160,9 +160,8 @@ private fun handleClientMessage(
  * failure is silently ignored, mirroring how [handleClientMessage] drops an unauthorised
  * `SET_DEST`.
  *
- * Runs on GameServer's listener thread(s) and calls [Alive.issueAttack], mutating combat
- * state the main loop reads concurrently - the same "fine for a demo, not hardened" caveat
- * as the rest of [handleClientMessage].
+ * Called from [handleClientMessage] on the main loop thread (see [drainPendingCommands]), so
+ * [Alive.issueAttack] mutates combat state without racing the loop's `world.tick()`.
  *
  * @return `true` when an attack was issued, `false` when the order was rejected
  */
@@ -197,8 +196,8 @@ internal fun issuePlayerAttack(
  * Coordinates arrive in the client's window pixel space (origin top-left) and are used here
  * as world coordinates unchanged, mirroring how SET_DEST treats its raw operands.
  *
- * Like [handleClientMessage], this runs on GameServer's listener thread(s) and mutates Actor
- * state that the main loop reads concurrently - fine for a demo, not hardened.
+ * Like [handleClientMessage], this is called only from [drainPendingCommands] on the main
+ * loop thread, never directly from a GameServer listener thread.
  */
 private fun handleClientInput(
     playerName: String,
@@ -214,6 +213,18 @@ private fun handleClientInput(
         MouseActionType.MOVE, MouseActionType.RELEASE ->
             println("Ignoring ${input.type} input from '$playerName' at (${input.x}, ${input.y})")
     }
+}
+
+/**
+ * Runs every closure queued in [queue], in FIFO order, removing each as it runs.
+ *
+ * [main] calls this once per loop iteration, before `world.tick()`, to apply commands that
+ * [GameServer]'s listener thread(s) queued via [main]'s `onPlayerMessage`/`onPlayerInput`
+ * callbacks - so [handleClientMessage] and [handleClientInput] always execute on the loop
+ * thread, never on a listener thread, with no synchronisation needed against the tick.
+ */
+internal fun drainPendingCommands(queue: ConcurrentLinkedQueue<() -> Unit>) {
+    generateSequence(queue::poll).forEach { it() }
 }
 
 /** How many unowned "zombie" [Alive]s the demo spawns in the graveyard. */
@@ -268,10 +279,16 @@ fun main() {
 
     // GameServer exposes no connect/disconnect callback to game code, so the loop reconciles
     // this map against server.playerNames each frame: a name that appeared gets a Player with
-    // a roster of Alives, a name that vanished has its roster removed from the world. It is
-    // concurrent because the listener-thread message handler reads it (to resolve the sender's
-    // roster for SET_DEST) while the loop thread reconciles it.
-    val players = ConcurrentHashMap<String, Player>()
+    // a roster of Alives, a name that vanished has its roster removed from the world. A plain
+    // map suffices - both the reconciliation below and the message handlers that read it (via
+    // pendingCommands, drained by drainPendingCommands) run on the loop thread only.
+    val players = mutableMapOf<String, Player>()
+
+    // Commands parsed from GameServer's listener thread(s) - onPlayerMessage/onPlayerInput
+    // below - are queued here rather than applied immediately, and drained on the loop thread
+    // by drainPendingCommands before world.tick(). That keeps every Actor/World mutation on
+    // one thread, present and future commands alike.
+    val pendingCommands = ConcurrentLinkedQueue<() -> Unit>()
 
     // GameServer's callbacks are constructor parameters with no public setter,
     // but handleClientMessage needs a reference to the server itself (to reply
@@ -285,10 +302,12 @@ fun main() {
     val server = GameServer(
         maxConnections = 4,
         onPlayerMessage = { playerName, message ->
-            serverRef?.let { handleClientMessage(playerName, message, actors, world, players, it) }
+            pendingCommands.add {
+                serverRef?.let { handleClientMessage(playerName, message, actors, world, players, it) }
+            }
         },
         onPlayerInput = { playerName, input ->
-            handleClientInput(playerName, input, actors)
+            pendingCommands.add { handleClientInput(playerName, input, actors) }
         }
     )
     serverRef = server
@@ -298,6 +317,8 @@ fun main() {
 
     try {
         while (true) {
+            drainPendingCommands(pendingCommands) // apply queued client commands on this thread
+
             val connected = server.playerNames
             (connected - players.keys).forEach { name -> players[name] = connectPlayer(name, world) }
             (players.keys - connected).forEach { name -> disconnectPlayer(players.remove(name)!!, world) }

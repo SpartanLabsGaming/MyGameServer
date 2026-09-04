@@ -10,8 +10,7 @@ game-object model (`World`, `Actor`, `Alive`, `Player`), the spatial index, and 
 
 ## Status
 
-Prototype. Single JVM, in-memory state, one hard-coded demo world. Not hardened for
-concurrency or production use.
+Prototype. Single JVM, in-memory state, one hard-coded demo world.
 
 ## How it works
 
@@ -19,15 +18,16 @@ concurrency or production use.
 
 `main()` runs a fixed **60 Hz** loop:
 
-1. **Reconcile players** — a new name in `GameServer.playerNames` gets a `Player` with a
+1. **Drain queued commands** — client commands arrive asynchronously on `GameServer`'s
+   listener threads; each is queued as a closure rather than applied immediately, and this
+   step runs every closure queued since the last iteration, on the loop thread (see the
+   concurrency note below).
+2. **Reconcile players** — a new name in `GameServer.playerNames` gets a `Player` with a
    roster of `Alive`s dropped into the world; a name that vanished has its roster removed.
-2. **`world.tick()`** — rebuilds the quadtree from current positions, then advances every
+3. **`world.tick()`** — rebuilds the quadtree from current positions, then advances every
    game object one step (movement, combat, death handling).
-3. **Broadcast** — every `VisibleObject` in the world is serialized and sent to every client
+4. **Broadcast** — every `VisibleObject` in the world is serialized and sent to every client
    as one `STATE <json>` datagram.
-
-Client commands arrive asynchronously on `GameServer`'s listener threads and mutate world
-state directly (see the concurrency note below).
 
 ### Players and ownership
 
@@ -77,10 +77,12 @@ received &mdash; the same list, in the same order, that the server resolves agai
 
 ### Concurrency note
 
-Command handlers run on listener threads and mutate `Actor` / `Alive` state that the loop
-thread reads and writes concurrently, without synchronization. Fine for a local demo; not
-safe under real load. Tracked in
-[issue #1](https://github.com/SpartanLabsGaming/MyGameServer/issues/1).
+Command handlers never run on a `GameServer` listener thread. `onPlayerMessage` /
+`onPlayerInput` only enqueue a closure onto a `ConcurrentLinkedQueue`; `drainPendingCommands`
+runs every queued closure on the loop thread, first thing each iteration, before
+`world.tick()`. All `Actor` / `Alive` / `World` mutation therefore happens on one thread, with
+no synchronization needed. Formerly tracked in
+[issue #1](https://github.com/SpartanLabsGaming/MyGameServer/issues/1) (fixed).
 
 ## Building and running
 
@@ -107,7 +109,8 @@ server &mdash; is in [`deploy/README.md`](deploy/README.md).
 ## Tests
 
 `src/test/kotlin/`, JUnit Platform. Current coverage: player-roster wiring
-(`PlayerRosterTest`) and the `ATTACK` command's authorization matrix (`AttackCommandTest`).
+(`PlayerRosterTest`), the `ATTACK` command's authorization matrix (`AttackCommandTest`), and
+the command-queue drain mechanism (`CommandQueueTest`).
 
 Tests are intended to follow the five-level hierarchy in the global coding guidelines;
 existing ones predate that layout.
