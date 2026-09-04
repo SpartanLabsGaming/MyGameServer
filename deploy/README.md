@@ -15,8 +15,8 @@ GitHub Actions (.github/workflows/deploy.yml)
 VM: systemd runs /opt/mygameserver/app/bin/MyGameServer  (user: mygameserver)
 ```
 
-The VM only ever runs a JRE — the build happens in Actions, because an `e2-micro`
-(1 GB RAM) cannot compile Kotlin reliably.
+The VM only runs the compiled app — no build toolchain — because an `e2-micro`
+(1 GB RAM) cannot compile Kotlin reliably; the build happens in Actions.
 
 ---
 
@@ -69,11 +69,11 @@ SSH into the VM (`gcloud compute ssh "$VM" --zone "$ZONE"`), then:
 curl -fsSL https://raw.githubusercontent.com/SpartanLabsGaming/MyGameServer/master/deploy/provision-vm.sh | sudo bash
 ```
 
-This installs Temurin JRE 23, creates the `mygameserver` and `deployer` users,
-installs `/etc/systemd/system/mygameserver.service`, drops in the CI deploy
-public key, and grants `deployer` a one-command sudo rule to restart the
-service. It is idempotent — re-run it after any change to
-`deploy/provision-vm.sh` or the unit.
+This installs Temurin JDK 23 and `rsync` (the deploy transport), creates the
+`mygameserver` and `deployer` users, installs
+`/etc/systemd/system/mygameserver.service`, drops in the CI deploy public key,
+and grants `deployer` a one-command sudo rule to restart the service. It is
+idempotent — re-run it after any change to `deploy/provision-vm.sh` or the unit.
 
 > Assumes a Debian- or Ubuntu-based image (the GCP default). Other images: adapt
 > the JRE install in `provision-vm.sh`.

@@ -36,6 +36,16 @@ if [[ $EUID -ne 0 ]]; then
   exit 1
 fi
 
+echo "==> Installing rsync (the CI deploy transport)"
+# GitHub Actions rsyncs the build onto the box; the minimal GCE Debian image
+# ships without it, which fails the deploy with "rsync: command not found".
+if ! command -v rsync &>/dev/null; then
+  apt-get update -qq
+  apt-get install -y -qq rsync
+else
+  echo "    rsync already present: $(rsync --version 2>&1 | head -n1)"
+fi
+
 echo "==> Installing Java 23 (Adoptium Temurin)"
 if ! java -version 2>&1 | grep -q '"23'; then
   apt-get update -qq
