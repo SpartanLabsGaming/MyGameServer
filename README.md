@@ -95,6 +95,15 @@ pins the build tool.
 
 Entry point: `MainKt`.
 
+## Deployment
+
+`master` is continuously deployed to a single Google Cloud VM: GitHub Actions
+(`.github/workflows/deploy.yml`) builds and tests, then `rsync`s the
+`installDist` output to the VM over SSH and restarts a `systemd` service. The
+full runbook &mdash; Google Cloud firewall/IP setup, VM provisioning
+(`deploy/provision-vm.sh`), the required secrets, and operating the running
+server &mdash; is in [`deploy/README.md`](deploy/README.md).
+
 ## Tests
 
 `src/test/kotlin/`, JUnit Platform. Current coverage: player-roster wiring
