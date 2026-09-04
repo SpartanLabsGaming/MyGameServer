@@ -45,16 +45,22 @@ Ownership is enforced on every command: a client can only move or attack with an
 ## Protocol
 
 All traffic is UDP. Messages are verb-prefixed text, except structured mouse input which is
-`INPUT <json>`. The handshake and per-connection channel setup are handled by GameTools'
+`INPUT <json>`. The handshake and connection multiplexing are handled by GameTools'
 `MultiConnectionUDPServer`.
 
 ### Handshake
 
 1. Client &rarr; port **9998** (`COMMON_LISTEN_PORT`): `Iam <name> /<ip>`
-2. Server &rarr; client: `/<ip> TXRXON <clientListenPort> <serverCommandPort>`
-3. Both sides switch to the dedicated per-connection port pair for everything after.
+2. Server &rarr; client: `/<ip> REGISTERED`
+3. All further traffic for that player - commands, `STATE` broadcasts, `KA` keepalives - is
+   multiplexed over that same shared common socket; there is no per-player dedicated port
+   pair (pre-3.0.0 GameTools/WebTools handed out a `TXRXON <sendPort> <receivePort>` pair
+   instead).
+4. The client must send a bare `KA` datagram on an idle interval (WebTools recommends ~20s)
+   from the socket it handshook on, to keep its NAT mapping warm. The server consumes `KA`
+   silently; it never reaches `onPlayerMessage`/`onPlayerInput`.
 
-### Client &rarr; server (dedicated channel)
+### Client &rarr; server (post-handshake)
 
 | Command | Effect |
 |---|---|
