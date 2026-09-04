@@ -4,7 +4,7 @@ The authoritative server for a small real-time multiplayer game. Clients connect
 receive a continuous stream of world snapshots, and send input commands; the server runs the
 simulation and is the single source of truth.
 
-Built on **GameTools** (`io.github.spartanlaboratories:GameTools`), which provides the
+Built on **GameTools** (`io.github.spartanlabsgaming:GameTools`), which provides the
 game-object model (`World`, `Actor`, `Alive`, `Player`), the spatial index, and the
 `GameServer` networking layer.
 
@@ -108,7 +108,7 @@ existing ones predate that layout.
 | Project | Role |
 |---|---|
 | **GameGraphics** | the LWJGL desktop client that renders `STATE` and sends commands |
-| **GameTools** (`io.github.spartanlaboratories:GameTools`) | game-object model, spatial index, `GameServer`; source in the sibling `MyGameTools` repo |
+| **GameTools** (`io.github.spartanlabsgaming:GameTools`) | game-object model, spatial index, `GameServer`; source in the sibling `MyGameTools` repo |
 | **WebTools** | the UDP transport (`MultiConnectionUDPServer`) underneath `GameServer` |
 
 ## Coding rules
