@@ -6,7 +6,7 @@ plugins {
     id("com.vanniktech.maven.publish") version "0.36.0"
 }
 
-group = "io.github.spartanlaboratories"
+group = "io.github.spartanlabsgaming"
 version = "1.0.0" as String
 
 repositories {
@@ -14,7 +14,7 @@ repositories {
 }
 
 dependencies {
-    implementation("io.github.spartanlaboratories:GameTools:1.8.0")
+    implementation("io.github.spartanlabsgaming:GameTools:1.8.0")
 
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
 
@@ -29,7 +29,7 @@ application {
 mavenPublishing {
     publishToMavenCentral()
     signAllPublications()
-    coordinates("io.github.spartanlaboratories", "MyGameServer", "1.0.0")
+    coordinates("io.github.spartanlabsgaming", "MyGameServer", "1.0.0")
 
     pom {
         name.set("My Game Server")
