@@ -72,7 +72,7 @@ received &mdash; the same list, in the same order, that the server resolves agai
 
 | Message | Payload |
 |---|---|
-| `STATE <json>` | polymorphic array of `DrawableSnapshot` (plain / `ActorSnapshot` / `AliveSnapshot`), one entry per visible object, every tick |
+| `STATE <json>` | polymorphic array of `DrawableSnapshot` (plain / `ActorSnapshot` / `AliveSnapshot`), one entry per visible object, every tick; each entry also carries a `buffs` array (`BuffSnapshot`: `name`, `durationTicks`, `suppressedCapabilities`), empty when the object has no active buffs |
 | `PONG` | reply to `PING` |
 
 ### Concurrency note
