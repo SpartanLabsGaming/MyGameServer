@@ -14,7 +14,7 @@ repositories {
 }
 
 dependencies {
-    implementation("io.github.spartanlabsgaming:GameTools:2.0.0")
+    implementation("io.github.spartanlabsgaming:GameTools:3.0.0")
 
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
 
