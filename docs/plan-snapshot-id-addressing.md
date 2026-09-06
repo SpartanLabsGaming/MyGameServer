@@ -1,6 +1,9 @@
 # Plan: address client commands by stable entity id
 
-**Status:** proposed (2026-09-05)
+**Status:** server side implemented on `feature/issue-6-entity-id-addressing` (2026-09-05);
+GameGraphics side (§6) still to do. Decisions 1 and 2 taken as recommended (cancelAttack
+wired into SET_DEST/STOP; SET_SPEED/STOP now id-addressed). `resolveOwnedAlive` helper
+extracted and tested (`SetDestCommandTest`, 7 tests). Tracked by MyGameServer#6.
 **Depends on:** GameTools 3.1.0 (already bumped in `build.gradle.kts`)
 **Closes (downstream):** MyGameTools#3 — "Broadcast snapshots have no stable identity"
 **Folds in (optional):** MyGameTools#1 follow-up — wire `cancelAttack()` into move/stop

@@ -65,14 +65,17 @@ All traffic is UDP. Messages are verb-prefixed text, except structured mouse inp
 | Command | Effect |
 |---|---|
 | `PING` | server replies `PONG` to that client only |
-| `SET_DEST <index> <x> <y>` | move the owned `Alive` at broadcast-list slot `<index>` toward `(x, y)` |
-| `ATTACK <attacker> <target>` | order the owned `Alive` at slot `<attacker>` to attack the `Alive` at slot `<target>` |
-| `SET_SPEED <index> <speed>` | set a demo actor's speed (indexes the demo-actor list) |
-| `STOP <index>` | stop a demo actor where it is |
+| `SET_DEST <id> <x> <y>` | move the owned `Alive` with entity id `<id>` toward `(x, y)` (breaks off any attack it was pursuing) |
+| `ATTACK <attackerId> <targetId>` | order the owned `Alive` `<attackerId>` to attack the `Alive` `<targetId>` |
+| `SET_SPEED <id> <speed>` | set the `Actor` `<id>`'s speed |
+| `STOP <id>` | stop the `Actor` `<id>` where it is (breaks off any attack) |
 | `INPUT <json>` | a `MouseAction`; a `PRESS` aims demo actor 0 at the point |
 
-`<index>` in `SET_DEST` / `ATTACK` is a position in the last `STATE` array the client
-received &mdash; the same list, in the same order, that the server resolves against.
+`<id>` operands are the `id` field of the target entry in the last `STATE` array the client
+received (the object's stable GameTools `EntityId`). The server resolves them with
+`World.byId`, so a command stays bound to the object the client meant even if the broadcast
+list has since shifted; an unknown id, or `0` (the unidentified sentinel), is silently
+ignored. (Before GameTools 3.1.0 these operands were positions in the `STATE` list.)
 
 ### Server &rarr; client
 
