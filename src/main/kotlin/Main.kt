@@ -1,5 +1,6 @@
 import com.spartanlabs.gaming.gameobjects.Actor
 import com.spartanlabs.gaming.gameobjects.Alive
+import com.spartanlabs.gaming.gameobjects.EntityId
 import com.spartanlabs.gaming.gameobjects.ModularStat
 import com.spartanlabs.gaming.gameobjects.Player
 import com.spartanlabs.gaming.gameobjects.VisibleObject
@@ -65,18 +66,23 @@ internal fun disconnectPlayer(player: Player, world: World) {
  * Parses a raw client message (whitespace-separated, case-insensitive
  * command) and dispatches on the first token:
  *   PING                          -> replies "PONG" to just that player
- *   SET_DEST <index> <x> <y>      -> sets the destination of the index-th broadcast object
- *   SET_SPEED <index> <speed>     -> sets actors[index].speed
- *   STOP <index>                  -> sets destination to current location
- *   ATTACK <attacker> <target>    -> orders the attacker Alive to attack the target Alive
+ *   SET_DEST <id> <x> <y>         -> sends the Alive with that entity id toward (x, y)
+ *   STOP <id>                     -> stops that Actor where it is
+ *   ATTACK <attackerId> <targetId> -> orders the attacker Alive to attack the target Alive
  *
- * SET_DEST's and ATTACK's indices are positions in the broadcast list - the [VisibleObject]s
- * among [World.gameObjects], in insertion order - which is the same list, in the same order,
- * that the client picked against in the last `STATE` it received. SET_DEST is applied only
- * when that slot holds an [Alive], that [Alive] has an [Alive.owner], and that owner is the
- * [Player] the sending client is associated with - else it is ignored. ATTACK additionally
- * requires the target slot to hold a different [Alive] that is not one of the sending
- * player's own units (see [issuePlayerAttack]).
+ * Every operand that names an object is the [GameObject.entityId] `raw` value carried on the
+ * matching `STATE` entry ([com.spartanlabs.gaming.gameobjects.DrawableSnapshot.id]), which
+ * the client reads straight off the last `STATE` it received - not a list position, so a
+ * command stays bound to the object the client meant even if the broadcast list has since
+ * shifted. Ids are resolved with [World.byId]; an unknown id (or `0`, the unidentified
+ * sentinel) resolves to `null` and the command is silently ignored. SET_DEST is applied only
+ * when the id resolves to an [Alive] that has an [Alive.owner] equal to the [Player] the
+ * sending client is associated with. ATTACK additionally requires the target id to resolve
+ * to a different [Alive] that is not one of the sending player's own units (see
+ * [issuePlayerAttack]).
+ *
+ * SET_DEST and STOP also call [Alive.cancelAttack] first, so a fresh move order breaks off
+ * any attack the unit was pursuing (GameTools 3.1.0).
  *
  * GameServer's onPlayerMessage callback provides the sending player's name,
  * so - unlike a plain broadcast-only server - PING can reply to just that
@@ -89,7 +95,6 @@ internal fun disconnectPlayer(player: Player, world: World) {
 private fun handleClientMessage(
     playerName: String,
     message: String,
-    actors: List<Actor>,
     world: World,
     players: Map<String, Player>,
     server: GameServer
@@ -102,45 +107,34 @@ private fun handleClientMessage(
             .onFailure { cause -> println("Could not reply to '$playerName': ${cause.message}") }
 
         "SET_DEST" -> {
-            val index = parts.getOrNull(1)?.toIntOrNull()
+            val id = parts.getOrNull(1)?.toLongOrNull()
             val x = parts.getOrNull(2)?.toDoubleOrNull()
             val y = parts.getOrNull(3)?.toDoubleOrNull()
-            if (index != null && x != null && y != null) {
-                // index is a position in the broadcast list the client picked against - the
-                // VisibleObjects among world.gameObjects, in insertion order (the same list,
-                // same order, as the STATE broadcast below). Honour the move only when that
-                // slot holds an Alive, the Alive has an owner, and the owner is the sender's
-                // player.
-                val target = world.gameObjects.filterIsInstance<VisibleObject>().getOrNull(index)
-                if (target is Alive) {
-                    val owner = target.owner
-                    if (owner != null && owner === players[playerName]) {
-                        target.destination = Point(x = x, y = y)
-                    }
+            if (id != null && x != null && y != null) {
+                // Honour the move only when the id resolves to an Alive the sending player
+                // owns. cancelAttack() first so a fresh move order breaks off any attack.
+                resolveOwnedAlive(id, playerName, world, players)?.let { alive ->
+                    alive.cancelAttack()
+                    alive.destination = Point(x = x, y = y)
                 }
             }
         }
 
-        "SET_SPEED" -> {
-            val index = parts.getOrNull(1)?.toIntOrNull()
-            val speed = parts.getOrNull(2)?.toDoubleOrNull()
-            if (index != null && speed != null && index in actors.indices) {
-                actors[index].speed = ModularStat(base = speed)
-            }
-        }
-
         "STOP" -> {
-            val index = parts.getOrNull(1)?.toIntOrNull()
-            if (index != null && index in actors.indices) {
-                actors[index].destination = Point(actors[index].location)
+            val id = parts.getOrNull(1)?.toLongOrNull()
+            if (id != null) {
+                (world.byId(EntityId(id)) as? Actor)?.let { actor ->
+                    (actor as? Alive)?.cancelAttack()
+                    actor.destination = Point(actor.location)
+                }
             }
         }
 
         "ATTACK" -> {
-            val attackerIndex = parts.getOrNull(1)?.toIntOrNull()
-            val targetIndex = parts.getOrNull(2)?.toIntOrNull()
-            if (attackerIndex != null && targetIndex != null) {
-                issuePlayerAttack(playerName, attackerIndex, targetIndex, world, players)
+            val attackerId = parts.getOrNull(1)?.toLongOrNull()
+            val targetId = parts.getOrNull(2)?.toLongOrNull()
+            if (attackerId != null && targetId != null) {
+                issuePlayerAttack(playerName, attackerId, targetId, world, players)
             }
         }
 
@@ -149,16 +143,35 @@ private fun handleClientMessage(
 }
 
 /**
- * Orders [playerName]'s [Alive] at broadcast-list slot [attackerIndex] to attack the [Alive]
- * at slot [targetIndex], when the order is legal.
+ * Resolves [id] to an [Alive] the client [playerName] is allowed to drive: the id must name
+ * an object [World.byId] still owns, that object must be an [Alive], and its [Alive.owner]
+ * must be the [Player] the sending client is associated with.
  *
- * Both indices are positions in the broadcast list - the [VisibleObject]s among
- * [World.gameObjects] in insertion order - the same list, in the same order, the client
- * picked against in the last `STATE`. The attack is issued only when every check passes:
- * both slots hold an [Alive], they are not the same actor, the attacker's [Alive.owner] is
- * the sending [Player], and the target is not one of that same player's own units. Any
- * failure is silently ignored, mirroring how [handleClientMessage] drops an unauthorised
- * `SET_DEST`.
+ * @return the [Alive], or `null` when the id is unknown/removed, names a non-[Alive], or
+ * names a unit the sender does not own - all of which a caller treats as "ignore the command"
+ */
+internal fun resolveOwnedAlive(
+    id: Long,
+    playerName: String,
+    world: World,
+    players: Map<String, Player>
+): Alive? {
+    val alive = world.byId(EntityId(id)) as? Alive ?: return null
+    val owner = alive.owner ?: return null
+    return alive.takeIf { owner === players[playerName] }
+}
+
+/**
+ * Orders [playerName]'s [Alive] with entity id [attackerId] to attack the [Alive] with
+ * entity id [targetId], when the order is legal.
+ *
+ * Both operands are [GameObject.entityId] `raw` values the client read off the last `STATE`
+ * it received (see [handleClientMessage]); they are resolved with [World.byId], so the order
+ * stays bound to the objects the client meant even if the broadcast list has since shifted.
+ * The attack is issued only when every check passes: both ids resolve to an [Alive], they
+ * are not the same actor, the attacker's [Alive.owner] is the sending [Player], and the
+ * target is not one of that same player's own units. Any failure is silently ignored,
+ * mirroring how [handleClientMessage] drops an unauthorised `SET_DEST`.
  *
  * Called from [handleClientMessage] on the main loop thread (see [drainPendingCommands]), so
  * [Alive.issueAttack] mutates combat state without racing the loop's `world.tick()`.
@@ -167,14 +180,13 @@ private fun handleClientMessage(
  */
 internal fun issuePlayerAttack(
     playerName: String,
-    attackerIndex: Int,
-    targetIndex: Int,
+    attackerId: Long,
+    targetId: Long,
     world: World,
     players: Map<String, Player>
 ): Boolean {
-    val visibles = world.gameObjects.filterIsInstance<VisibleObject>()
-    val attacker = visibles.getOrNull(attackerIndex) as? Alive ?: return false
-    val target = visibles.getOrNull(targetIndex) as? Alive ?: return false
+    val attacker = world.byId(EntityId(attackerId)) as? Alive ?: return false
+    val target = world.byId(EntityId(targetId)) as? Alive ?: return false
     if (attacker === target) return false
 
     val player = players[playerName]
@@ -189,12 +201,14 @@ internal fun issuePlayerAttack(
  * GameServer 1.2.0 decodes these into [MouseAction]s and routes them here, separately from
  * the free-text commands that reach [handleClientMessage].
  *
- *   PRESS   -> aims actor 0 at the clicked point (same effect as "SET_DEST 0 <x> <y>")
+ *   PRESS   -> aims demo actor 0 (the first zombie) at the clicked point
  *   MOVE    -> ignored (cursor tracking is not modelled in this demo)
  *   RELEASE -> ignored
  *
- * Coordinates arrive in the client's window pixel space (origin top-left) and are used here
- * as world coordinates unchanged, mirroring how SET_DEST treats its raw operands.
+ * Unlike the id-addressed `SET_DEST` command, this path is positional by design - it always
+ * drives `actors[0]`, a fixed demo hook with no ownership check. Coordinates arrive in the
+ * client's window pixel space (origin top-left) and are used here as world coordinates
+ * unchanged, mirroring how `SET_DEST` treats its raw operands.
  *
  * Like [handleClientMessage], this is called only from [drainPendingCommands] on the main
  * loop thread, never directly from a GameServer listener thread.
@@ -303,7 +317,7 @@ fun main() {
         maxConnections = 4,
         onPlayerMessage = { playerName, message ->
             pendingCommands.add {
-                serverRef?.let { handleClientMessage(playerName, message, actors, world, players, it) }
+                serverRef?.let { handleClientMessage(playerName, message, world, players, it) }
             }
         },
         onPlayerInput = { playerName, input ->

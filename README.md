@@ -4,9 +4,10 @@ The authoritative server for a small real-time multiplayer game. Clients connect
 receive a continuous stream of world snapshots, and send input commands; the server runs the
 simulation and is the single source of truth.
 
-Built on **GameTools** (`io.github.spartanlabsgaming:GameTools`), which provides the
-game-object model (`World`, `Actor`, `Alive`, `Player`), the spatial index, and the
-`GameServer` networking layer.
+Built on **GameTools** (`io.github.spartanlabsgaming:gametools`, the umbrella artifact
+re-exporting `gametools-core` and `gametools-net`), which provides the game-object model
+(`World`, `Actor`, `Alive`, `Player`), the spatial index, and the `GameServer` networking
+layer.
 
 ## Status
 
@@ -65,20 +66,22 @@ All traffic is UDP. Messages are verb-prefixed text, except structured mouse inp
 | Command | Effect |
 |---|---|
 | `PING` | server replies `PONG` to that client only |
-| `SET_DEST <index> <x> <y>` | move the owned `Alive` at broadcast-list slot `<index>` toward `(x, y)` |
-| `ATTACK <attacker> <target>` | order the owned `Alive` at slot `<attacker>` to attack the `Alive` at slot `<target>` |
-| `SET_SPEED <index> <speed>` | set a demo actor's speed (indexes the demo-actor list) |
-| `STOP <index>` | stop a demo actor where it is |
+| `SET_DEST <id> <x> <y>` | move the owned `Alive` with entity id `<id>` toward `(x, y)` (breaks off any attack it was pursuing) |
+| `ATTACK <attackerId> <targetId>` | order the owned `Alive` `<attackerId>` to attack the `Alive` `<targetId>` |
+| `STOP <id>` | stop the `Actor` `<id>` where it is (breaks off any attack) |
 | `INPUT <json>` | a `MouseAction`; a `PRESS` aims demo actor 0 at the point |
 
-`<index>` in `SET_DEST` / `ATTACK` is a position in the last `STATE` array the client
-received &mdash; the same list, in the same order, that the server resolves against.
+`<id>` operands are the `id` field of the target entry in the last `STATE` array the client
+received (the object's stable GameTools `EntityId`). The server resolves them with
+`World.byId`, so a command stays bound to the object the client meant even if the broadcast
+list has since shifted; an unknown id, or `0` (the unidentified sentinel), is silently
+ignored. (Before GameTools 3.1.0 these operands were positions in the `STATE` list.)
 
 ### Server &rarr; client
 
 | Message | Payload |
 |---|---|
-| `STATE <json>` | polymorphic array of `DrawableSnapshot` (plain / `ActorSnapshot` / `AliveSnapshot`), one entry per visible object, every tick; each entry also carries a `buffs` array (`BuffSnapshot`: `name`, `durationTicks`, `suppressedCapabilities`), empty when the object has no active buffs |
+| `STATE <json>` | polymorphic array of `DrawableSnapshot` (plain / `ActorSnapshot` / `AliveSnapshot`), one entry per visible object, every tick; each entry carries an `id` (long &mdash; the object's stable `EntityId`, `0` if unidentified; new in GameTools 3.1.0) so a client can track an object across frames by id rather than list position, and a `buffs` array (`BuffSnapshot`: `name`, `durationTicks`, `suppressedCapabilities`), empty when the object has no active buffs |
 | `PONG` | reply to `PING` |
 
 ### Concurrency note
@@ -126,7 +129,7 @@ existing ones predate that layout.
 | Project | Role |
 |---|---|
 | **GameGraphics** | the LWJGL desktop client that renders `STATE` and sends commands |
-| **GameTools** (`io.github.spartanlabsgaming:GameTools`) | game-object model, spatial index, `GameServer`; source in the sibling `MyGameTools` repo |
+| **GameTools** (`io.github.spartanlabsgaming:gametools` = `gametools-core` + `gametools-net`) | game-object model, spatial index, `GameServer`; source in the sibling `MyGameTools` repo |
 | **WebTools** | the UDP transport (`MultiConnectionUDPServer`) underneath `GameServer` |
 
 ## Coding rules
