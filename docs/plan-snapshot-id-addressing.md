@@ -1,225 +1,176 @@
-# Plan: address client commands by stable entity id
+# Plan: adopt GameTools 5.0.0's `ClientCommand` protocol
 
-**Status:** server side implemented on `feature/issue-6-entity-id-addressing` (2026-09-05);
-GameGraphics side (§6) still to do. Decisions 1 and 2 taken as recommended (cancelAttack
-wired into SET_DEST/STOP; SET_SPEED/STOP now id-addressed). `resolveOwnedAlive` helper
-extracted and tested (`SetDestCommandTest`, 7 tests). Tracked by MyGameServer#6.
-**Depends on:** GameTools 3.1.0 (already bumped in `build.gradle.kts`)
+**Status:** re-scoped 2026-09-07. An interim, hand-rolled entity-id command protocol landed
+on `master` (see "Interim state" below); the remaining work is to replace it with the
+first-class command API that GameTools **5.0.0** now ships. Tracked by MyGameServer#6.
+**Depends on:** GameTools 5.0.0 (`io.github.spartanlabsgaming:gametools`, already bumped)
 **Closes (downstream):** MyGameTools#3 — "Broadcast snapshots have no stable identity"
-**Folds in (optional):** MyGameTools#1 follow-up — wire `cancelAttack()` into move/stop
-**Cross-repo:** GameGraphics must ship the matching client change in lockstep
-**Order:** do this before `plan-simulation-loop-adoption.md` (both touch `Main.kt`)
+**Cross-repo:** GameGraphics must ship the matching client change in lockstep — mixed
+versions degrade to "commands no-op", never "wrong target", but neither `master` may sit
+half-migrated.
+**Order:** do this before `plan-simulation-loop-adoption.md` (both touch `Main.kt`).
 
 ---
 
-## 1. Problem
+## Interim state (already on `master`)
 
-Client commands address game objects by **position in the last `STATE` broadcast list**:
+The first pass at MyGameServer#6 was written against GameTools **3.1.0**, before the library
+had a command layer, so it hand-rolls one in `Main.kt`:
 
-- `Main.kt` `handleClientMessage` resolves `SET_DEST` against
-  `world.gameObjects.filterIsInstance<VisibleObject>()[index]`.
-- `issuePlayerAttack` resolves `ATTACK <attacker> <target>` the same way.
-- `SET_SPEED` / `STOP` index a *different* list — the demo-actor list `actors` (the zombies).
-- GameGraphics `Viewport.selectedActor` stores a picked **index** and re-resolves it against
-  each new `STATE` (`Main.kt` `selectedRaw`).
+- `SET_DEST <id> <x> <y>` / `ATTACK <atkId> <tgtId>` / `STOP <id>` — whitespace-delimited
+  text verbs, operands are `EntityId.raw` values, resolved with `World.byId`.
+- `SET_SPEED` was **removed entirely** (2026-09-07) — it was an unauthorized demo hook with
+  no client equivalent worth keeping, and it has no standard-command counterpart.
+- Ownership / "not your own target" checks live in `Main.kt`
+  (`resolveOwnedAlive`, `issuePlayerAttack`), covered by `AttackCommandTest` /
+  `SetDestCommandTest`.
+- `Alive.cancelAttack()` is called before a `SET_DEST` / `STOP` so a fresh move order breaks
+  off a pending attack.
 
-When any earlier object leaves the world between the frame a client picked an index and the
-frame the server acts on the queued command, every later index shifts by one — a move or
-attack lands on the wrong unit, and the client selection silently retargets. This is latent
-today (nothing is removed at runtime yet) but becomes real as soon as `REMOVAL` deaths,
-disconnects, or projectiles remove objects mid-game. The combat and death systems already
-do this.
+This is correct but is a private re-implementation of something the library now owns and
+versions.
 
-## 2. What GameTools 3.1.0 gives us
+## What GameTools 5.0.0 gives us
 
-- `GameObject.entityId: EntityId` (`@JvmInline value class EntityId(val raw: Long)`),
-  assigned exactly once by the owning `World` (via `World.add`, or on first sight in
-  `gameObjects` at the top of `tick()`), never reused, never changed.
-- `World.byId(id: EntityId): GameObject?` — returns `null` for an unknown / removed id, which
-  is exactly the "client named something that's gone" signal we want.
-- Every `DrawableSnapshot` variant now carries `val id: Long`
-  (`VisibleObjectSnapshot` / `ActorSnapshot` / `AliveSnapshot`), defaulted to
-  `DrawableSnapshot.UNIDENTIFIED = 0L`. `0` never resolves (a `World` never hands out `0`).
+`gametools-core`, package `com.spartanlabs.gaming.networking.command`:
 
-## 3. Wire protocol change
+| Piece | What it is |
+|---|---|
+| `interface ClientCommand` + 6 standard commands | `MoveTo(actor, x, y)`, `MoveDir(actor, angleDegrees)`, `Follow(actor, target)`, `Stop(actor)`, `Attack(attacker, target)`, `StopAttack(alive)` — all `@Serializable`, `EntityId` operands, `@SerialName("gametools.*")` |
+| `ClientCommandCodec(appCommands = EmptySerializersModule())` | polymorphic `COMMAND <json>` envelope (same shape as `STATE <json>` / `INPUT <json>`, `type` discriminator). `encode(cmd): String`, `decode(payloadAfterVerb): Result<ClientCommand>` |
+| `ClientCommand.applyTo(world): ApplyResult` | resolves every `EntityId` operand via `World.byId`, checks the resolved object is the right kind (`Actor` vs `Alive`), then runs the mechanism. Returns `Applied` / `TargetMissing(id)` / `WrongType(id, expected)` / `Unhandled`. **Does not authorize** — ownership/faction/range is the caller's job, by design. |
+| `GameServer(…, commandCodec: ClientCommandCodec?, onCommand: (playerName, ClientCommand) -> Unit)` | new `@JvmOverloads` ctor params, both defaulted. Routes a `COMMAND <json>` datagram to `onCommand`; with no codec a `COMMAND` datagram falls through to `onPlayerMessage` unchanged. |
 
-Command token **counts are unchanged**; only operand semantics change (index → id):
+`EntityId` is now `@Serializable(with = EntityIdSerializer::class)` and serializes as a **bare
+`Long`**, so the id a client reads off a `STATE` entry drops straight into a command payload.
 
-| Command | Before | After |
-|---|---|---|
-| `SET_DEST <n> <x> <y>` | `<n>` = broadcast-list index | `<n>` = `id` of that `STATE` entry |
-| `ATTACK <a> <t>` | list indices | entity ids |
-| `SET_SPEED <n> <speed>` | demo-actor-list index | entity id |
-| `STOP <n>` | demo-actor-list index | entity id |
-| `INPUT <json>` (PRESS) | aims demo actor 0 | unchanged (demo-only, positional by design) |
+## Wire protocol change
 
-**Mixed-version failure mode:** an old client sends small integers (`0,1,2`) — as ids these
-don't resolve, so the new server silently ignores the command. An old server given a large
-id treats it as a list index — `getOrNull` returns `null`, command ignored. Both degrade to
-"commands do nothing", never "wrong target". Still, the two repos must release together.
+The text verbs (`SET_DEST …`, `ATTACK …`, `STOP …`) are replaced by one verb:
 
-## 4. Server changes — `src/main/kotlin/Main.kt`
-
-### 4.1 `handleClientMessage`
-
-- Drop the `actors: List<Actor>` parameter (no longer needed once `SET_SPEED`/`STOP` go
-  through `world`). `handleClientInput` keeps its own `actors` reference for PRESS.
-- Add `import com.spartanlabs.gaming.gameobjects.EntityId`.
-- Parse operands with `toLongOrNull()` instead of `toIntOrNull()`.
-
-`SET_DEST`:
-```kotlin
-val id = parts.getOrNull(1)?.toLongOrNull()
-val x  = parts.getOrNull(2)?.toDoubleOrNull()
-val y  = parts.getOrNull(3)?.toDoubleOrNull()
-if (id != null && x != null && y != null) {
-    val target = world.byId(EntityId(id))
-    if (target is Alive && target.owner != null && target.owner === players[playerName]) {
-        target.cancelAttack()                 // MyGameTools#1 follow-up — see §7 decision 1
-        target.destination = Point(x = x, y = y)
-    }
-}
+```
+COMMAND {"type":"gametools.moveTo","actor":7,"x":120.0,"y":-40.0}
+COMMAND {"type":"gametools.attack","attacker":7,"target":13}
+COMMAND {"type":"gametools.stop","actor":7}
 ```
 
-`SET_SPEED`:
-```kotlin
-val id = parts.getOrNull(1)?.toLongOrNull()
-val speed = parts.getOrNull(2)?.toDoubleOrNull()
-if (id != null && speed != null) {
-    (world.byId(EntityId(id)) as? Actor)?.let { it.speed = ModularStat(base = speed) }
-}
-```
+`PING`/`PONG` stays on the raw `onPlayerMessage` path. `INPUT <json>` (mouse) is unchanged.
 
-`STOP`:
-```kotlin
-val id = parts.getOrNull(1)?.toLongOrNull()
-if (id != null) {
-    (world.byId(EntityId(id)) as? Actor)?.let { actor ->
-        (actor as? Alive)?.cancelAttack()
-        actor.destination = Point(actor.location)
-    }
-}
-```
+**Mixed-version failure mode:** an old client still sends `SET_DEST 7 …` text → the new
+server has a `commandCodec`, so `SET_DEST` is an unrecognised verb → `onPlayerMessage` logs
+"Unknown command". A new client sends `COMMAND <json>` to an old server → old server has no
+`COMMAND` verb → also ignored. No wrong-target window. The two repos still ship together.
 
-`ATTACK`: parse two `Long`s, delegate to `issuePlayerAttack` (below).
+## Server changes — `src/main/kotlin/Main.kt`
 
-### 4.2 `issuePlayerAttack`
+1. **Add a shared codec.** `private val COMMAND_CODEC = ClientCommandCodec()` (no app module —
+   the six standard commands are enough now `SET_SPEED` is gone). If GameGraphics and
+   MyGameServer ever need a custom command, both build the codec from the same
+   `SerializersModule`.
+2. **Wire it into `GameServer`:**
+   ```kotlin
+   val server = GameServer(
+       maxConnections = 4,
+       onPlayerMessage = { name, msg -> pendingCommands.add { serverRef?.let { handlePlainMessage(name, msg, it) } } },
+       onPlayerInput   = { name, input -> pendingCommands.add { handleClientInput(name, input, actors) } },
+       commandCodec = COMMAND_CODEC,
+       onCommand = { name, cmd -> pendingCommands.add { handleCommand(name, cmd, world, players) } },
+   )
+   ```
+   Same "queue onto the loop thread" discipline as today — `applyTo` mutates `World` state,
+   so it must not run on a listener thread.
+3. **`handlePlainMessage`** shrinks to just `PING` → `server.push(name, "PONG")` plus an
+   "unknown command" log. Delete the `SET_DEST` / `ATTACK` / `STOP` parsing, the
+   `parts.split` / `toLongOrNull` operand handling, and the `server` param threading that only
+   `PING` still needs (keep it — `PONG` needs `push`).
+4. **New `handleCommand(playerName, command, world, players)`** — authorization the library
+   omits, then delegate:
+   ```kotlin
+   when (command) {
+       is MoveTo -> onOwnedAlive(command.actor) { it.cancelAttack(); command.applyTo(world) }
+       is Stop   -> onOwnedAlive(command.actor) { it.cancelAttack(); command.applyTo(world) }
+       is Attack -> {
+           val attacker = resolveOwnedAlive(command.attacker.raw, playerName, world, players) ?: return
+           val target = world.byId(command.target) as? Alive ?: return
+           if (attacker === target || target.owner === players[playerName]) return
+           command.applyTo(world)     // == attacker.issueAttack(target)
+       }
+       is MoveDir, is Follow, is StopAttack -> { /* not exposed to clients yet — ignore */ }
+   }
+   ```
+   where `onOwnedAlive(id) { … }` is `resolveOwnedAlive(id.raw, playerName, world, players)?.let { … }`.
+   - Keeping `cancelAttack()` before `MoveTo`/`Stop` is a **deliberate local policy** —
+     `applyTo` will not do it (see MyGameTools#<TBD>). If that upstream issue lands, this
+     collapses to a plain `command.applyTo(world)`.
+   - `resolveOwnedAlive` / `issuePlayerAttack`'s ownership logic is reused; `issuePlayerAttack`
+     can fold into the `is Attack` branch or stay as the tested helper it delegates to.
+5. **`ApplyResult` handling:** log anything that is not `Applied` at debug (`TargetMissing`
+   when the unit died between pick and act is normal). Not surfaced to the client in this
+   pass.
 
-Rename params `attackerIndex`/`targetIndex` → `attackerId`/`targetId` (`Long`); resolve via
-`world.byId`:
-```kotlin
-internal fun issuePlayerAttack(
-    playerName: String, attackerId: Long, targetId: Long,
-    world: World, players: Map<String, Player>
-): Boolean {
-    val attacker = world.byId(EntityId(attackerId)) as? Alive ?: return false
-    val target   = world.byId(EntityId(targetId))   as? Alive ?: return false
-    if (attacker === target) return false
-    val player = players[playerName]
-    if (player == null || attacker.owner !== player || target.owner === player) return false
-    attacker.issueAttack(target)
-    return true
-}
-```
-The `visibles` local and the `filterIsInstance` go away. Update the KDoc (drop
-"positions in the broadcast list").
+## Server tests — `src/test/kotlin/`
 
-### 4.3 `handleClientMessage` call site in `main()`
+Keep the flat / default-package layout the existing test files use.
 
-Drop the `actors` argument. Nothing else in `main()` changes — broadcasting still sends
-`world.gameObjects.filterIsInstance<VisibleObject>()`; the client now reads `id` off each
-entry instead of counting positions.
+- **`AttackCommandTest`** — the ownership assertions move to driving `handleCommand(name,
+  Attack(EntityId(a), EntityId(b)), …)` (or keep calling `issuePlayerAttack` if it stays the
+  helper). Id-stability tests (`ids stay stable when an earlier object is removed`) are
+  unchanged.
+- **`SetDestCommandTest`** — `resolveOwnedAlive` cases unchanged; add a `handleCommand` +
+  `MoveTo` case asserting `cancelAttack()` ran (unit was attacking → issue a `MoveTo` → its
+  `attackState` is back to `NONE` and `destination` moved).
+- **New `CommandCodecTest`** (level-2 / deterministic): `COMMAND_CODEC.decode(codec.encode(cmd)
+  .substringAfter(' '))` round-trips each of the six commands; a garbage payload yields
+  `Result.failure`; an unknown `type` yields `Result.failure`.
+- **New in `Main.kt` handling:** `MoveDir` / `Follow` / `StopAttack` from a client are
+  ignored (no exception, no state change).
 
-### 4.4 `disconnectPlayer` (note, no change required)
-
-It removes the roster straight from `world.gameObjects`. `World.byId` is rebuilt from
-`gameObjects` every `tick()`, so a removed unit's id stops resolving from the next tick —
-which is after the disconnect is processed in the same loop iteration. No stale-hit window
-in practice. (Optional tidy-up: route removals through `world.removeList` so `byId` and the
-`GameEvent.EntityRemoved` bus event both fire — out of scope here.)
-
-## 5. Server tests — `src/test/kotlin/`
-
-Keep the flat / default-package layout the existing three test files use (see §7 decision 3).
-
-### 5.1 `AttackCommandTest` (rewrite call sites)
-
-- `Fixture` already does `world.add(...)`, so `aliceUnit.entityId` / `bobUnit.entityId` are
-  assigned. Replace every `issuePlayerAttack("x", attackerIndex = 0, targetIndex = 1, …)`
-  with `attackerId = f.aliceUnit.entityId.raw, targetId = f.bobUnit.entityId.raw`.
-- `a target slot that is not an Alive is rejected` → pass `scenery.entityId.raw`.
-- `an out-of-range index is rejected` → rename to `an unknown id is rejected`
-  (`targetId = 999_999L`), plus `attackerId = 0L` (UNIDENTIFIED) rejected.
-- `an actor cannot attack itself` → same id for both.
-
-### 5.2 New tests (add to `AttackCommandTest` or a new `CommandAddressingTest`)
-
-- **`a command addressed to a removed unit is rejected`**: add a unit, capture
-  `entityId.raw`, `world.gameObjects.remove(it)` + `world.tick()`, assert
-  `issuePlayerAttack(... that id ...)` is `false`.
-- **`ids stay stable when an earlier object is removed`**: add A, B, C; record ids; remove A;
-  `world.tick()`; assert `world.byId(B.id) === B` and `world.byId(C.id) === C` — the exact
-  case position-indexing got wrong.
-
-### 5.3 Optional: extract + test `SET_DEST` resolution
-
-`SET_DEST` has no direct test today (it's an inline `when` branch). Extract:
-```kotlin
-internal fun resolveOwnedAlive(id: Long, playerName: String, world: World,
-                               players: Map<String, Player>): Alive?
-```
-and have the `SET_DEST` branch call it. New `SetDestCommandTest` mirrors `AttackCommandTest`'s
-ownership cases. (Decision 3: this is the level-2 "component" tier; kept flat to match the repo.)
-
-## 6. Client changes — GameGraphics (separate PR, same release)
+## Client changes — GameGraphics (separate PR, same release)
 
 | File | Change |
 |---|---|
-| `networking/NetworkClient.kt` | `setDestination(id: Long, …)`, `setSpeed(id: Long, …)`, `stopActor(id: Long)`, `attack(attackerId: Long, targetId: Long)`. Command string format unchanged. Update KDoc ("positions in the last `STATE` list" → "the `id` field of the target entry"). |
-| `graphics/Window.kt` | Add `fun pickId(xPx: Double, yPx: Double): Long? = pick(xPx, yPx)?.let { lastSnapshots.getOrNull(it)?.id }`. `lastSnapshots` is `List<VisibleObjectSnapshot>` (drawable cores); `.id` survives `drawableCore()` unwrapping because the inner `VisibleObjectSnapshot` carries the same `entityId.raw` as its `Actor`/`Alive` wrapper. Keep `pick` returning an index for `Picking`'s internal use. |
-| `graphics/ui/GameView.kt` | `pickActor(...): Long?`; `moveActor(actorId: Long, …)`; `attack(attackerId: Long, xPx, yPx): Boolean`. |
-| `graphics/ui/Viewport.kt` | `var selectedActor: Long? = null`; set from `game.pickActor(...)`; pass through on command paths. |
-| `Main.kt` `gameView()` | `pickActor` → `window.pickId`. `attack`: `val targetId = window.pickId(...) ?: return false; if (targetId == attackerId) return false; val target = client.getWorldState().firstOrNull { it.id == targetId } as? AliveSnapshot ?: return false; …` |
-| `Main.kt` `buildStage()` | `selectedRaw = { viewport.selectedActor?.let { id -> client.getWorldState().firstOrNull { it.id == id } } }`. Rename `selectedIndex: () -> Int?` → `selectedId: () -> Long?`; header label `"Actor #$id"` (id is now stable and debuggable — decision 4). Update `bottomInfoPanel` signature. |
-| `test/kotlin/DrawableSnapshotsTest.kt` | Add: `id` survives `drawableCore()` on all three variants; selection-by-id finds the right object after the list is reordered/shortened. |
-| `test/kotlin/ViewportTest.kt` | Selection stores an id; a removed id resolves to `null` (nothing selected). |
-| `README.md` | Interaction/protocol notes: commands address objects by `id`, not list position. |
+| `build.gradle*` | bump to `io.github.spartanlabsgaming:gametools:5.0.0` (or `gametools-core` alone if it only needs the snapshot + command types). |
+| `networking/NetworkClient.kt` | replace the text-command builders (`setDestination`, `stopActor`, `attack`) with `send(codec.encode(MoveTo(EntityId(id), x, y)))` etc., using a `ClientCommandCodec` built the same way as the server's. Drop `setSpeed` entirely. |
+| snapshot decoding | `DrawableSnapshot.id` is now `EntityId`, not `Long` — update any reader to `.id.raw` (or keep `EntityId`). Wire bytes are unchanged (`EntityIdSerializer` emits a bare long), so `ignoreUnknownKeys` decoders are unaffected at runtime; this is a source-level fix only. |
+| `graphics/**`, `Main.kt` | selection already stores an id (from the interim pass); point the command paths at the codec. |
+| `test/kotlin/**` | codec round-trip; `id` survives snapshot unwrapping as `EntityId`. |
+| `README.md` | protocol section: `COMMAND <json>` envelope + the six `gametools.*` commands. |
 
-## 7. Open decisions
+## Version bump
 
-1. **Fold in `cancelAttack()` wiring (MyGameTools#1 follow-up)?** Recommend **yes** — it's
-   2 lines in the same `SET_DEST`/`STOP` branches, unblocked by 3.1.0, and matches the
-   "adopt 3.1.0" theme. MyGameTools#2 (stop swinging at a dead target) needs **no**
-   MyGameServer work — `Alive.considerAttack()` now ends the attack itself.
-2. **`SET_SPEED` / `STOP`: switch to id-addressing or keep demo-actor-list indices?**
-   Recommend **switch** — one address space for all commands is the whole point, and it lets
-   a client stop/hasten any actor, not just the 10 zombies.
-3. **Test package layout:** recommend **match the existing flat/default-package** three test
-   files rather than introduce the `testing.component` hierarchy from the global guidelines,
-   which this repo has never used. Revisit repo-wide separately if desired.
-4. **GameGraphics selection label:** show the raw `id` (`"Actor #7"`) vs a friendly ordinal.
-   Recommend **raw id** — stable across frames, useful for debugging.
-5. **MyGameServer version bump:** `1.0.0 → 1.1.0` (minor; protocol change but a prototype,
-   consistent with how the 1.6.0 wire change was treated) vs `2.0.0`. Recommend **1.1.0**.
+`1.0.0 → 2.0.0`. The command wire form is fully replaced (`COMMAND <json>` for the text
+verbs), which is a larger break than the interim pass's operand-semantics change; a major
+bump is clearer than another `1.x`.
 
-## 8. Rollout
+## Open decisions
 
-1. Land the plain GameTools **3.1.0 bump** first (already in the working tree: `build.gradle.kts`
-   + `README.md` STATE row) — non-breaking, build green. Its own small PR.
-2. Branch `feature/issue-N-entity-id-addressing` off master. Open a MyGameServer tracking
-   issue ("Adopt GameTools 3.1.0 stable entity ids for command addressing"); reference
-   MyGameTools#3. Squash-merge with `Closes #N` per repo convention.
-3. GameGraphics: matching branch + issue, merged and released in lockstep. Neither repo's
-   `master` should sit half-migrated (mixed-version = commands silently no-op).
-4. Manual smoke test: two clients connected, one unit dies (drop its health to 0 with a
-   `RESPAWN`→`REMOVAL` tweak or an `ATTACK`), confirm the other client's selection and a
-   queued move still hit the intended unit.
+1. **`MoveDir` / `Follow` / `StopAttack` — expose to clients now or later?** Recommend
+   **later** — GameGraphics has no UI for "move in a heading" or "follow that unit" yet, and
+   `handleCommand` ignoring them is a one-liner. Add when the client grows the controls.
+2. **Keep `issuePlayerAttack` / `resolveOwnedAlive` as separate tested helpers, or inline into
+   `handleCommand`?** Recommend **keep** — they are the authorization unit and are already
+   tested; `handleCommand` just calls them then `applyTo`.
+3. **Surface `ApplyResult` failures to the client?** Recommend **no** for this pass — nothing
+   consumes it and `TargetMissing` is routine. Revisit if a client wants command NACKs.
+4. **Should `MoveTo`/`Stop` cancelling a pending attack be an upstream feature?** Filed as
+   MyGameTools#<TBD> (see below). Until then MyGameServer keeps the two-line local policy.
 
-## 9. Test plan (hierarchy levels)
+## Rollout
+
+1. This plan's MyGameServer branch: `Main.kt` + tests + README + this doc. `./gradlew build`
+   green. Squash-merge per repo convention.
+2. GameGraphics: matching branch, merged and released in lockstep. Neither `master`
+   half-migrated.
+3. Manual smoke test: two clients connected, issue a move + an attack from each, kill one
+   unit (`ATTACK` to 0 HP → `REMOVAL`), confirm the survivor's queued command still hits the
+   intended unit and a command naming the dead unit is a silent no-op.
+
+## Test plan (hierarchy levels)
 
 - **L1 (gating):** `./gradlew build` + `test` green in both repos on each branch.
-- **L2 (component):** rewritten `AttackCommandTest`, new id-stability tests, optional
-  `SetDestCommandTest`; GameGraphics `DrawableSnapshotsTest` / `ViewportTest` additions.
-- **L3 (integration):** none automated (no client/server harness); covered by §8.4 smoke test.
+- **L2 (component):** `handleCommand` ownership + `cancelAttack` behaviour; `CommandCodecTest`
+  round-trips; ignored-command cases.
+- **L3 (integration):** none automated (no client/server harness); covered by the §Rollout
+  smoke test.
 - **L4b (e2e):** manual — two real GameGraphics clients against a live server, unit removal
   mid-session.

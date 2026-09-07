@@ -9,10 +9,9 @@ import kotlin.test.assertNull
 import kotlin.test.assertSame
 
 /**
- * Covers [resolveOwnedAlive], the authorization behind the `SET_DEST` / `SET_SPEED` (Alive
- * case) commands in Main.kt's [handleClientMessage]: an entity id is honoured only when it
- * still names an [Alive] the sending [Player] owns. Same ownership rules as
- * [AttackCommandTest], on the movement path.
+ * Covers [resolveOwnedAlive], the authorization behind the `SET_DEST` command in Main.kt's
+ * [handleClientMessage]: an entity id is honoured only when it still names an [Alive] the
+ * sending [Player] owns. Same ownership rules as [AttackCommandTest], on the movement path.
  */
 class SetDestCommandTest {
 

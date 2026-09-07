@@ -68,7 +68,6 @@ All traffic is UDP. Messages are verb-prefixed text, except structured mouse inp
 | `PING` | server replies `PONG` to that client only |
 | `SET_DEST <id> <x> <y>` | move the owned `Alive` with entity id `<id>` toward `(x, y)` (breaks off any attack it was pursuing) |
 | `ATTACK <attackerId> <targetId>` | order the owned `Alive` `<attackerId>` to attack the `Alive` `<targetId>` |
-| `SET_SPEED <id> <speed>` | set the `Actor` `<id>`'s speed |
 | `STOP <id>` | stop the `Actor` `<id>` where it is (breaks off any attack) |
 | `INPUT <json>` | a `MouseAction`; a `PRESS` aims demo actor 0 at the point |
 

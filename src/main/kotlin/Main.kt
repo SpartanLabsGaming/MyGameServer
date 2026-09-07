@@ -67,7 +67,6 @@ internal fun disconnectPlayer(player: Player, world: World) {
  * command) and dispatches on the first token:
  *   PING                          -> replies "PONG" to just that player
  *   SET_DEST <id> <x> <y>         -> sends the Alive with that entity id toward (x, y)
- *   SET_SPEED <id> <speed>        -> sets that Actor's speed
  *   STOP <id>                     -> stops that Actor where it is
  *   ATTACK <attackerId> <targetId> -> orders the attacker Alive to attack the target Alive
  *
@@ -118,14 +117,6 @@ private fun handleClientMessage(
                     alive.cancelAttack()
                     alive.destination = Point(x = x, y = y)
                 }
-            }
-        }
-
-        "SET_SPEED" -> {
-            val id = parts.getOrNull(1)?.toLongOrNull()
-            val speed = parts.getOrNull(2)?.toDoubleOrNull()
-            if (id != null && speed != null) {
-                (world.byId(EntityId(id)) as? Actor)?.let { it.speed = ModularStat(base = speed) }
             }
         }
 
