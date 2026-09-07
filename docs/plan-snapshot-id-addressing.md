@@ -100,7 +100,7 @@ server has a `commandCodec`, so `SET_DEST` is an unrecognised verb → `onPlayer
    ```
    where `onOwnedAlive(id) { … }` is `resolveOwnedAlive(id.raw, playerName, world, players)?.let { … }`.
    - Keeping `cancelAttack()` before `MoveTo`/`Stop` is a **deliberate local policy** —
-     `applyTo` will not do it (see MyGameTools#<TBD>). If that upstream issue lands, this
+     `applyTo` will not do it (see MyGameTools#39). If that upstream issue lands, this
      collapses to a plain `command.applyTo(world)`.
    - `resolveOwnedAlive` / `issuePlayerAttack`'s ownership logic is reused; `issuePlayerAttack`
      can fold into the `is Attack` branch or stay as the tested helper it delegates to.
@@ -153,7 +153,7 @@ bump is clearer than another `1.x`.
 3. **Surface `ApplyResult` failures to the client?** Recommend **no** for this pass — nothing
    consumes it and `TargetMissing` is routine. Revisit if a client wants command NACKs.
 4. **Should `MoveTo`/`Stop` cancelling a pending attack be an upstream feature?** Filed as
-   MyGameTools#<TBD> (see below). Until then MyGameServer keeps the two-line local policy.
+   MyGameTools#39. Until then MyGameServer keeps the two-line local policy.
 
 ## Rollout
 
