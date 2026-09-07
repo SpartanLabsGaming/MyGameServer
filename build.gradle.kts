@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "io.github.spartanlabsgaming"
-version = "1.0.0" as String
+version = "2.0.0" as String
 
 repositories {
     mavenCentral()
@@ -29,7 +29,7 @@ application {
 mavenPublishing {
     publishToMavenCentral()
     signAllPublications()
-    coordinates("io.github.spartanlabsgaming", "MyGameServer", "1.0.0")
+    coordinates("io.github.spartanlabsgaming", "MyGameServer", "2.0.0")
 
     pom {
         name.set("My Game Server")

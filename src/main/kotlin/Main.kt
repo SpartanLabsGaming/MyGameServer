@@ -8,6 +8,16 @@ import com.spartanlabs.gaming.gameobjects.World
 import com.spartanlabs.gaming.networking.GameServer
 import com.spartanlabs.gaming.networking.MouseAction
 import com.spartanlabs.gaming.networking.MouseActionType
+import com.spartanlabs.gaming.networking.command.ApplyResult
+import com.spartanlabs.gaming.networking.command.Attack
+import com.spartanlabs.gaming.networking.command.ClientCommand
+import com.spartanlabs.gaming.networking.command.ClientCommandCodec
+import com.spartanlabs.gaming.networking.command.Follow
+import com.spartanlabs.gaming.networking.command.MoveDir
+import com.spartanlabs.gaming.networking.command.MoveTo
+import com.spartanlabs.gaming.networking.command.Stop
+import com.spartanlabs.gaming.networking.command.StopAttack
+import com.spartanlabs.gaming.networking.command.applyTo
 import com.spartanlabs.generaltools.Color
 import com.spartanlabs.geometry.Dimensions
 import com.spartanlabs.geometry.Point
@@ -63,82 +73,88 @@ internal fun disconnectPlayer(player: Player, world: World) {
 }
 
 /**
- * Parses a raw client message (whitespace-separated, case-insensitive
- * command) and dispatches on the first token:
- *   PING                          -> replies "PONG" to just that player
- *   SET_DEST <id> <x> <y>         -> sends the Alive with that entity id toward (x, y)
- *   STOP <id>                     -> stops that Actor where it is
- *   ATTACK <attackerId> <targetId> -> orders the attacker Alive to attack the target Alive
+ * Handles a raw, unstructured client datagram - anything that is not an `INPUT <json>` mouse
+ * event (see [handleClientInput]) or a `COMMAND <json>` client command (see [handleCommand]).
+ * Dispatches on the first whitespace-delimited token, case-insensitively:
+ *   PING -> replies "PONG" to just that player via [GameServer.push]
  *
- * Every operand that names an object is the [GameObject.entityId] `raw` value carried on the
- * matching `STATE` entry ([com.spartanlabs.gaming.gameobjects.DrawableSnapshot.id]), which
- * the client reads straight off the last `STATE` it received - not a list position, so a
- * command stays bound to the object the client meant even if the broadcast list has since
- * shifted. Ids are resolved with [World.byId]; an unknown id (or `0`, the unidentified
- * sentinel) resolves to `null` and the command is silently ignored. SET_DEST is applied only
- * when the id resolves to an [Alive] that has an [Alive.owner] equal to the [Player] the
- * sending client is associated with. ATTACK additionally requires the target id to resolve
- * to a different [Alive] that is not one of the sending player's own units (see
- * [issuePlayerAttack]).
+ * Structured orders (move / attack / stop) used to arrive here as text verbs; since GameTools
+ * 5.0.0 they come in as `COMMAND <json>` ([ClientCommand]s) and are routed to [handleCommand].
+ * `PING` is the only verb still spoken on this raw path.
  *
- * SET_DEST and STOP also call [Alive.cancelAttack] first, so a fresh move order breaks off
- * any attack the unit was pursuing (GameTools 3.1.0).
- *
- * GameServer's onPlayerMessage callback provides the sending player's name,
- * so - unlike a plain broadcast-only server - PING can reply to just that
- * one player via [GameServer.push].
+ * GameServer's onPlayerMessage callback provides the sending player's name, so - unlike a
+ * plain broadcast-only server - PING can reply to just that one player.
  *
  * Called only from [drainPendingCommands] on the main loop thread - never directly from a
- * GameServer listener thread - so mutating Actor/World state here needs no synchronisation
- * with [main]'s `world.tick()`.
+ * GameServer listener thread.
  */
-private fun handleClientMessage(
+private fun handlePlainMessage(
     playerName: String,
     message: String,
-    world: World,
-    players: Map<String, Player>,
     server: GameServer
 ) {
-    val parts = message.split(" ".toRegex()).filter { it.isNotBlank() }
-    val command = parts.getOrNull(0)?.uppercase() ?: return
-
-    when (command) {
+    when (message.split(" ".toRegex()).firstOrNull { it.isNotBlank() }?.uppercase()) {
         "PING" -> server.push(playerName, "PONG")
             .onFailure { cause -> println("Could not reply to '$playerName': ${cause.message}") }
 
-        "SET_DEST" -> {
-            val id = parts.getOrNull(1)?.toLongOrNull()
-            val x = parts.getOrNull(2)?.toDoubleOrNull()
-            val y = parts.getOrNull(3)?.toDoubleOrNull()
-            if (id != null && x != null && y != null) {
-                // Honour the move only when the id resolves to an Alive the sending player
-                // owns. cancelAttack() first so a fresh move order breaks off any attack.
-                resolveOwnedAlive(id, playerName, world, players)?.let { alive ->
-                    alive.cancelAttack()
-                    alive.destination = Point(x = x, y = y)
-                }
-            }
+        else -> println("Unknown message from '$playerName': $message")
+    }
+}
+
+/**
+ * Authorizes a decoded [ClientCommand] from [playerName] against this game's ownership rules -
+ * which GameTools' [applyTo] deliberately omits - then carries it out with [applyTo].
+ *
+ * Only the three commands a client has UI for are honoured; each is gated first:
+ *   [MoveTo], [Stop] -> the operand must be an [Alive] the sender owns ([resolveOwnedAlive]).
+ *     [Alive.cancelAttack] is called first so a fresh move order breaks off a pending attack
+ *     (a local policy until MyGameTools#39 folds it into [applyTo]).
+ *   [Attack] -> the attacker must be owned by the sender and the target a different [Alive]
+ *     the sender does not own ([authorizeAttack]).
+ * [MoveDir], [Follow] and [StopAttack] are valid [ClientCommand]s with no client control yet;
+ * they are logged and dropped. [ClientCommand] is not `sealed`, so a future standard command
+ * also falls through the `else` branch until wired here.
+ *
+ * Called only from [drainPendingCommands] on the main loop thread (see the queueing in
+ * [main]), so [applyTo]'s [World] mutation never races [main]'s `world.tick()`.
+ */
+internal fun handleCommand(
+    playerName: String,
+    command: ClientCommand,
+    world: World,
+    players: Map<String, Player>
+) {
+    when (command) {
+        is MoveTo -> resolveOwnedAlive(command.actor, playerName, world, players)?.let { alive ->
+            alive.cancelAttack() // local policy - a fresh move order breaks off an attack (MyGameTools#39)
+            report(command, command.applyTo(world), playerName)
         }
 
-        "STOP" -> {
-            val id = parts.getOrNull(1)?.toLongOrNull()
-            if (id != null) {
-                (world.byId(EntityId(id)) as? Actor)?.let { actor ->
-                    (actor as? Alive)?.cancelAttack()
-                    actor.destination = Point(actor.location)
-                }
-            }
+        is Stop -> resolveOwnedAlive(command.actor, playerName, world, players)?.let { alive ->
+            alive.cancelAttack()
+            report(command, command.applyTo(world), playerName)
         }
 
-        "ATTACK" -> {
-            val attackerId = parts.getOrNull(1)?.toLongOrNull()
-            val targetId = parts.getOrNull(2)?.toLongOrNull()
-            if (attackerId != null && targetId != null) {
-                issuePlayerAttack(playerName, attackerId, targetId, world, players)
-            }
+        is Attack -> if (authorizeAttack(playerName, command.attacker, command.target, world, players)) {
+            report(command, command.applyTo(world), playerName)
         }
 
-        else -> println("Unknown command from '$playerName': $message")
+        is MoveDir, is Follow, is StopAttack ->
+            println("Ignoring unsupported command ${command::class.simpleName} from '$playerName'")
+
+        else ->
+            println("Ignoring unknown command ${command::class.simpleName} from '$playerName'")
+    }
+}
+
+/**
+ * Logs an [applyTo] outcome that is not [ApplyResult.Applied]. Those are expected and dropped:
+ * a [ApplyResult.TargetMissing] is routine when a unit died between the client's click and the
+ * command being drained. Nothing is surfaced to the client this pass.
+ */
+private fun report(command: ClientCommand, result: ApplyResult, playerName: String) {
+    if (result !is ApplyResult.Applied) {
+        println("Command ${command::class.simpleName} from '$playerName' did not apply: $result")
     }
 }
 
@@ -147,71 +163,69 @@ private fun handleClientMessage(
  * an object [World.byId] still owns, that object must be an [Alive], and its [Alive.owner]
  * must be the [Player] the sending client is associated with.
  *
+ * [id] is a GameTools [EntityId] carried inside a [ClientCommand]'s JSON (see [handleCommand]),
+ * resolved with [World.byId] so the command stays bound to the object the client meant even if
+ * the broadcast list has since shifted.
+ *
  * @return the [Alive], or `null` when the id is unknown/removed, names a non-[Alive], or
  * names a unit the sender does not own - all of which a caller treats as "ignore the command"
  */
 internal fun resolveOwnedAlive(
-    id: Long,
+    id: EntityId,
     playerName: String,
     world: World,
     players: Map<String, Player>
 ): Alive? {
-    val alive = world.byId(EntityId(id)) as? Alive ?: return null
+    val alive = world.byId(id) as? Alive ?: return null
     val owner = alive.owner ?: return null
     return alive.takeIf { owner === players[playerName] }
 }
 
 /**
- * Orders [playerName]'s [Alive] with entity id [attackerId] to attack the [Alive] with
- * entity id [targetId], when the order is legal.
+ * Whether [playerName] may order the [Alive] with entity id [attackerId] to attack the [Alive]
+ * with entity id [targetId]. This is the authorization GameTools' [applyTo] deliberately omits;
+ * [handleCommand] calls it before letting an [Attack] command's [applyTo] run.
  *
- * Both operands are [GameObject.entityId] `raw` values the client read off the last `STATE`
- * it received (see [handleClientMessage]); they are resolved with [World.byId], so the order
- * stays bound to the objects the client meant even if the broadcast list has since shifted.
- * The attack is issued only when every check passes: both ids resolve to an [Alive], they
- * are not the same actor, the attacker's [Alive.owner] is the sending [Player], and the
- * target is not one of that same player's own units. Any failure is silently ignored,
- * mirroring how [handleClientMessage] drops an unauthorised `SET_DEST`.
+ * Both operands are GameTools [EntityId]s carried inside the [Attack] command's JSON; they are
+ * resolved with [World.byId], so the check stays bound to the objects the client meant even if
+ * the broadcast list has since shifted. Every condition must hold: both ids resolve to an
+ * [Alive], they are not the same actor, the attacker's [Alive.owner] is the sending [Player],
+ * and the target is not one of that same player's own units.
  *
- * Called from [handleClientMessage] on the main loop thread (see [drainPendingCommands]), so
- * [Alive.issueAttack] mutates combat state without racing the loop's `world.tick()`.
- *
- * @return `true` when an attack was issued, `false` when the order was rejected
+ * @return `true` when this player may issue this attack, `false` when the order is rejected
  */
-internal fun issuePlayerAttack(
+internal fun authorizeAttack(
     playerName: String,
-    attackerId: Long,
-    targetId: Long,
+    attackerId: EntityId,
+    targetId: EntityId,
     world: World,
     players: Map<String, Player>
 ): Boolean {
-    val attacker = world.byId(EntityId(attackerId)) as? Alive ?: return false
-    val target = world.byId(EntityId(targetId)) as? Alive ?: return false
+    val attacker = world.byId(attackerId) as? Alive ?: return false
+    val target = world.byId(targetId) as? Alive ?: return false
     if (attacker === target) return false
 
-    val player = players[playerName]
-    if (player == null || attacker.owner !== player || target.owner === player) return false
-
-    attacker.issueAttack(target)
-    return true
+    val player = players[playerName] ?: return false
+    return attacker.owner === player && target.owner !== player
 }
 
 /**
  * Handles a structured mouse event delivered by a client as an `INPUT <json>` datagram.
  * GameServer 1.2.0 decodes these into [MouseAction]s and routes them here, separately from
- * the free-text commands that reach [handleClientMessage].
+ * both the raw messages that reach [handlePlainMessage] and the [ClientCommand]s that reach
+ * [handleCommand].
  *
  *   PRESS   -> aims demo actor 0 (the first zombie) at the clicked point
  *   MOVE    -> ignored (cursor tracking is not modelled in this demo)
  *   RELEASE -> ignored
  *
- * Unlike the id-addressed `SET_DEST` command, this path is positional by design - it always
+ * Unlike an id-addressed [MoveTo] command, this path is positional by design - it always
  * drives `actors[0]`, a fixed demo hook with no ownership check. Coordinates arrive in the
  * client's window pixel space (origin top-left) and are used here as world coordinates
- * unchanged, mirroring how `SET_DEST` treats its raw operands.
+ * unchanged.
  *
- * Like [handleClientMessage], this is called only from [drainPendingCommands] on the main
- * loop thread, never directly from a GameServer listener thread.
+ * Like [handleCommand], this is called only from [drainPendingCommands] on the main loop
+ * thread, never directly from a GameServer listener thread.
  */
 private fun handleClientInput(
     playerName: String,
@@ -233,9 +247,10 @@ private fun handleClientInput(
  * Runs every closure queued in [queue], in FIFO order, removing each as it runs.
  *
  * [main] calls this once per loop iteration, before `world.tick()`, to apply commands that
- * [GameServer]'s listener thread(s) queued via [main]'s `onPlayerMessage`/`onPlayerInput`
- * callbacks - so [handleClientMessage] and [handleClientInput] always execute on the loop
- * thread, never on a listener thread, with no synchronisation needed against the tick.
+ * [GameServer]'s listener thread(s) queued via [main]'s `onPlayerMessage`/`onPlayerInput`/
+ * `onCommand` callbacks - so [handlePlainMessage], [handleCommand] and [handleClientInput]
+ * always execute on the loop thread, never on a listener thread, with no synchronisation
+ * needed against the tick.
  */
 internal fun drainPendingCommands(queue: ConcurrentLinkedQueue<() -> Unit>) {
     generateSequence(queue::poll).forEach { it() }
@@ -298,30 +313,40 @@ fun main() {
     // pendingCommands, drained by drainPendingCommands) run on the loop thread only.
     val players = mutableMapOf<String, Player>()
 
-    // Commands parsed from GameServer's listener thread(s) - onPlayerMessage/onPlayerInput
-    // below - are queued here rather than applied immediately, and drained on the loop thread
-    // by drainPendingCommands before world.tick(). That keeps every Actor/World mutation on
-    // one thread, present and future commands alike.
+    // Commands parsed from GameServer's listener thread(s) - onPlayerMessage/onPlayerInput/
+    // onCommand below - are queued here rather than applied immediately, and drained on the
+    // loop thread by drainPendingCommands before world.tick(). That keeps every Actor/World
+    // mutation on one thread, present and future commands alike.
     val pendingCommands = ConcurrentLinkedQueue<() -> Unit>()
 
+    // The codec that decodes a "COMMAND <json>" datagram into a ClientCommand (GameTools
+    // 5.0.0). No app module: the six standard gametools.* commands are the whole vocabulary.
+    // A GameGraphics client must encode with a codec built the same way.
+    val commandCodec = ClientCommandCodec()
+
     // GameServer's callbacks are constructor parameters with no public setter,
-    // but handleClientMessage needs a reference to the server itself (to reply
+    // but handlePlainMessage needs a reference to the server itself (to reply
     // via push()). serverRef sidesteps the chicken-and-egg problem: the lambda
     // only reads it once a message actually arrives, by which point the
     // assignment below has long since happened.
     //
-    // onPlayerMessage is passed by name because GameServer 1.2.0 added a third
-    // parameter (onPlayerInput) - a trailing lambda would now bind to that one.
+    // Every callback is passed by name: GameServer's constructor has grown trailing
+    // parameters (onPlayerInput in 1.2.0, commandCodec + onCommand in 5.0.0), so a trailing
+    // lambda would bind to whichever is last rather than to onPlayerMessage.
     var serverRef: GameServer? = null
     val server = GameServer(
         maxConnections = 4,
         onPlayerMessage = { playerName, message ->
             pendingCommands.add {
-                serverRef?.let { handleClientMessage(playerName, message, world, players, it) }
+                serverRef?.let { handlePlainMessage(playerName, message, it) }
             }
         },
         onPlayerInput = { playerName, input ->
             pendingCommands.add { handleClientInput(playerName, input, actors) }
+        },
+        commandCodec = commandCodec,
+        onCommand = { playerName, command ->
+            pendingCommands.add { handleCommand(playerName, command, world, players) }
         }
     )
     serverRef = server
@@ -340,8 +365,8 @@ fun main() {
             world.tick() // rebuilds the quadtree, then advances every object one step
 
             // Sends every VisibleObject in the world as a single "STATE <json>" datagram to
-            // every player. This is the exact list (same order) that SET_DEST indices resolve
-            // against.
+            // every player. Each entry carries its stable EntityId, which is what a client
+            // names in a COMMAND operand (resolved server-side via World.byId).
             server.broadcast(world.gameObjects.filterIsInstance<VisibleObject>())
                 .onFailure { cause -> println("Failed to broadcast actor state: ${cause.message}") }
 
