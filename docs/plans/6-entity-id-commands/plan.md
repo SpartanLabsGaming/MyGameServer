@@ -17,12 +17,10 @@
 - **What this plans:** the MyGameServer-side migration only. The GameGraphics client change
   is a separate, lockstep repo (GameGraphics#1) — this plan names the coordination but does
   not design it.
-- **Status:** implemented on `feature/issue-6-client-command-protocol` (this document committed
-  alongside the implementation, per the header note above). Open decision 4 resolved: **merge
-  the server now, gate the release on GameGraphics#1** (it only ever degrades to no-op).
+- **Status:** as-built record moved to [final-implementation.md](final-implementation.md).
 - **Target version:** MyGameServer `1.0.0` → `2.0.0` (the client-command wire form is fully
   replaced).
-- **Related docs:** `docs/plan-simulation-loop-adoption.md` (do this plan first — both edit
+- **Related docs:** `docs/plans/7-simulation-loop/plan.md` (do this plan first — both edit
   `Main.kt`); issue MyGameTools#39 (upstream ask: `applyTo` should call off a pending attack
   on a movement command); GameGraphics#1 (matching client).
 
@@ -380,7 +378,7 @@ val server = GameServer(
 - **Related projects › GameTools row:** note `gametools-net` now also carries the
   `ClientCommand` protocol.
 
-### 3.4 `docs/plan-snapshot-id-addressing.md`
+### 3.4 `docs/plans/6-entity-id-commands/plan.md`
 
 This document (rewritten in place). Committed with stage 1 of the implementation.
 
@@ -546,7 +544,7 @@ No perf or a11y surface. UAT = the §7 smoke test plus free play, gated on GameG
   description):
   1. `feat: adopt GameTools 5.0.0 ClientCommand protocol for client commands`
      — `src/main/kotlin/Main.kt`, `build.gradle.kts` (2.0.0), `README.md`, and
-     **`docs/plan-snapshot-id-addressing.md`** (this file, so `git log --follow` binds plan
+     **`docs/plans/6-entity-id-commands/plan.md`** (this file, so `git log --follow` binds plan
      to implementation).
   2. `test: dispatch ClientCommands and retarget the command tests`
      — new `ClientCommandDispatchTest.kt`, renamed `MoveCommandTest.kt`, updated
@@ -612,7 +610,7 @@ No perf or a11y surface. UAT = the §7 smoke test plus free play, gated on GameG
    conflicting `feature/selection-inspector-and-buttons` WIP branch.
 3. **Merge** per Open decision 4.
 4. **Manual smoke test** (§5 Level 4b) against the deployed server once both sides are in.
-5. **`docs/plan-simulation-loop-adoption.md`** — the next `Main.kt` change, do it after this
+5. **`docs/plans/7-simulation-loop/plan.md`** — the next `Main.kt` change, do it after this
    lands (both touch `main()`).
 6. **When MyGameTools#39 lands:** drop the explicit `alive.cancelAttack()` in
    `handleCommand`'s `MoveTo` / `Stop` branches and simplify tests #2 / #6.
