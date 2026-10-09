@@ -17,9 +17,7 @@
 - **What this plans:** the MyGameServer-side migration only. The GameGraphics client change
   is a separate, lockstep repo (GameGraphics#1) — this plan names the coordination but does
   not design it.
-- **Status:** implemented on `feature/issue-6-client-command-protocol` (this document committed
-  alongside the implementation, per the header note above). Open decision 4 resolved: **merge
-  the server now, gate the release on GameGraphics#1** (it only ever degrades to no-op).
+- **Status:** as-built record moved to [final-implementation.md](final-implementation.md).
 - **Target version:** MyGameServer `1.0.0` → `2.0.0` (the client-command wire form is fully
   replaced).
 - **Related docs:** `docs/plans/7-simulation-loop/plan.md` (do this plan first — both edit
