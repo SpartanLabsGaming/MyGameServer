@@ -1,7 +1,7 @@
 # Plan: adopt GameTools `SimulationLoop` for the game loop
 
 **Status:** proposed (2026-09-05)
-**Depends on:** GameTools 3.1.0 (already bumped); `plan-snapshot-id-addressing.md` landed first
+**Depends on:** GameTools 3.1.0 (already bumped); `../6-entity-id-commands/plan.md` landed first
 **Cross-repo:** none — no wire-protocol change
 **Related upstream:** MyGameTools#23 (the `SimulationLoop` feature this consumes)
 
@@ -173,7 +173,7 @@ Flat / default-package, matching the repo.
 
 ## 8. Rollout
 
-1. Rebase on `master` after `plan-snapshot-id-addressing.md` has landed (both edit `Main.kt`).
+1. Rebase on `master` after `../6-entity-id-commands/plan.md` has landed (both edit `Main.kt`).
 2. Branch `refactor/issue-N-simulation-loop`. Open a MyGameServer tracking issue.
 3. `./gradlew build` + `run` a local server, connect one GameGraphics client, verify units
    tick, move commands land, a client disconnect removes units, Ctrl-C shuts down cleanly.
