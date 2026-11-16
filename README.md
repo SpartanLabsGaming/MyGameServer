@@ -183,8 +183,3 @@ existing ones predate that layout.
 | **GameGraphics** | the LWJGL desktop client that renders `STATE` and sends commands |
 | **GameTools** (`io.github.spartanlabsgaming:gametools` = `gametools-core` + `gametools-net`) | game-object model, spatial index, `GameServer`, and the `ClientCommand` / `ClientCommandCodec` command protocol (`gametools-net`); source in the sibling `MyGameTools` repo |
 | **WebTools** | the UDP transport (`MultiConnectionUDPServer`) underneath `GameServer` |
-
-## Coding rules
-
-Paradigm, error handling (`Result` over thrown exceptions), KDoc, import grouping, and test
-structure are governed by `.aiassistant/rules/`.
